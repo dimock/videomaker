@@ -1147,14 +1147,25 @@ def copySourceFiles(copyFolder):
   image_names = {}
   video_names = {}
   audio_names = {}
-  ffcmds_list, ffsnds_list = generate_ffcmds_list()
+  ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
   for ffsnd in ffsnds_list:
+    if len(ffsnd.fname) == 0 or ffsnd.silent:
+      continue
     audio_names[os.path.basename(ffsnd.fname)] = ffsnd.fname
   for ffcmd in ffcmds_list:
+    if len(ffcmd.ifname) == 0 or ffcmd.tcolor:
+      continue
     if ffcmd.tvideo:
       video_names[os.path.basename(ffcmd.ifname)] = ffcmd.ifname
     else:
       image_names[os.path.basename(ffcmd.ifname)] = ffcmd.ifname
+  for ffovl in ffovls_list:
+    if len(ffovl.ifname) == 0 or ffovl.blank:
+      continue
+    if ffovl.tvideo:
+      video_names[os.path.basename(ffovl.ifname)] = ffovl.ifname
+    else:
+      image_names[os.path.basename(ffovl.ifname)] = ffovl.ifname
   for (root_path, dirs, files) in os.walk(copyFolder):
     for file in files:
       if file in files:
