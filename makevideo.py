@@ -1073,6 +1073,7 @@ def merge_all_videos(ofile):
     if ffcmd_file:
       ffmpeg_files += ffcmd_file
       nfiles += 1
+    print(ffcmd)
   nsndfiles = 0
   sound_deltat = 0.0
   for i, ffsnd in enumerate(ffsnds_list):
@@ -1092,7 +1093,9 @@ def merge_all_videos(ofile):
     print(ffovl)
   if total_deltat != sound_deltat or total_deltat != overlay_deltat:
     raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat} overlay_deltat={overlay_deltat}")
-  for ffcmd in ffcmds_list:
+  for i, ffcmd in enumerate(ffcmds_list):
+    if i > 0 and ffcmd.overlay and ffcmds_list[i-1].create_out:
+      raise RuntimeError(f"Incorrect overlay at {i}. previous fragment could not be overlayed")
     ffcmd.ffmpeg_filter()
     ffmpeg_filters.append(ffcmd.video_filters)
     ffmpeg_filters.append(ffcmd.audio_filters)
@@ -1186,5 +1189,5 @@ if __name__ == "__main__":
       cut_all_videos()
     if args.mergeVideos:
       merge_all_videos( os.path.join(outputFolder, args.outputFile) )
-  except ValueError as ve:
-    print("error: ", ve)
+  except Exception as e:
+    print("error: ", e)
