@@ -223,8 +223,8 @@ class FFSound:
         if key == "duration":
           self.duration = math.floor(float(value))
 
-  def update(self, nfiles, ffsnds_list, ffcmds_list):
-    self.isound += nfiles
+  def update(self, isound, ffsnds_list, ffcmds_list):
+    self.isound = isound
     self.deltat = 0.0
     for i in range(self.istart, self.iend):
       if ffcmds_list[i].create_out:
@@ -264,7 +264,6 @@ class FFSound:
     t1 = self.tstart + self.tfade
     t2 = self.tend - self.tfade
     t3 = self.tend
-    i = self.isound
     if t2 < t0:
       raise ValueError(f"audio time {t0} {t2} incorrect for {self.fname} at position {self.istart}")
     tt = []
@@ -381,6 +380,7 @@ class FFBase:
             self.asample_rate = int(value)
  
 class FFCmd(FFBase):
+  icmd = -1
   fname = ''
   tdelta = ''
   deltat = 0.0
@@ -443,7 +443,7 @@ class FFCmd(FFBase):
     video_filters = []
     audio_filters = []
     if self.tvideo:
-      video_filters += [f"[{self.index}:v]setpts={1.0/self.frate}*PTS"]
+      video_filters += [f"[{self.icmd}:v]setpts={1.0/self.frate}*PTS"]
       if self.crop:
         cw = int(self.width*self.cropw/100)
         ch = int(self.height*self.croph/100)
@@ -451,12 +451,12 @@ class FFCmd(FFBase):
         cy = int(self.height*self.cropy/100)
         video_filters += [f"crop={cw}:{ch}:{cx}:{cy}"]
         video_filters += [f"scale={self.width}:{self.height},setsar=1"]
-      audio_filters += [f"[{self.index}:a]atempo={self.frate},volume={self.volume}"]
+      audio_filters += [f"[{self.icmd}:a]atempo={self.frate},volume={self.volume}"]
     elif self.tcolor:
       video_filters += [f"color={self.color}:s={self.width}x{self.height}:d={self.deltat},setsar=1"]
       audio_filters += [f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}"]
     else: # image
-      video_prefix = f"[{self.index}:v]"
+      video_prefix = f"[{self.icmd}:v]"
       if self.crop:
         cw = int(self.iwidth*self.cropw/100)
         ch = int(self.iheight*self.croph/100)
@@ -486,6 +486,9 @@ class FFCmd(FFBase):
     if self.create_out:
       self.voutname = vname
       self.aoutname = aname
+
+  def update(self, icmd):
+    self.icmd = icmd
 
   def ffmpeg_file(self):
     if self.tvideo:
@@ -551,8 +554,8 @@ class FFOverlay(FFBase):
     else:
       return ['-loop', '1', '-t', f"{self.deltat}", "-i", self.ifname]
 
-  def update(self, nfiles, ffoverlays_list, ffcmds_list):
-    self.ioverlay += nfiles
+  def update(self, ioverlay, ffoverlays_list, ffcmds_list):
+    self.ioverlay = ioverlay
     self.deltat = 0.0
     for i in range(self.ioverlay_start, self.ioverlay_end):
       if ffcmds_list[i].create_out:
@@ -927,6 +930,7 @@ def generate_ffcmds_list():
   texts = load_texts()
   index = 0
   fadet = 0.0
+  icmd = 0
   isound = 0
   ioverlay = 0
   ffcmds_list = []
@@ -967,6 +971,10 @@ def generate_ffcmds_list():
         continue 
       r = create_ffcmds(p, index, fadet)
       index, ffcmds, fadet = r[0], r[1], r[2]
+      for ffcmd in ffcmds:
+        if not ffcmd.tcolor:
+          ffcmd.icmd = icmd
+          icmd += 1
       ffcmds_list += ffcmds
     ffcmds_list[-1].updateLast()
   width = videoWidth
@@ -1051,8 +1059,7 @@ def cut_all_videos():
   for ffcmd in ffcmds_list:
     ffcmd.cut_video_part()
 
-def merge_all_videos(ofile):
-  ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
+def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   ffmpeg_cmds = [ffmpeg_name]
   ffmpeg_files = []
   ffmpeg_filters = []
@@ -1062,8 +1069,10 @@ def merge_all_videos(ofile):
   total_deltat = 0.0
   width = videoWidth
   height = videoHeight
-  nfiles = 0
-  for ffcmd in ffcmds_list:
+  indexFile = 0
+  for i, ffcmd in enumerate(ffcmds_list):
+    ffcmd.index = i
+    ffcmd.update(indexFile)
     if ffcmd.tvideo:
       width = ffcmd.width
       height = ffcmd.height
@@ -1071,24 +1080,25 @@ def merge_all_videos(ofile):
       total_deltat += ffcmd.deltat
     ffcmd_file = ffcmd.ffmpeg_file()
     if ffcmd_file:
+      indexFile += 1
       ffmpeg_files += ffcmd_file
-      nfiles += 1
     print(ffcmd)
-  nsndfiles = 0
   sound_deltat = 0.0
   for i, ffsnd in enumerate(ffsnds_list):
-    ffsnd.update(nfiles, ffsnds_list, ffcmds_list)
+    ffsnd.index = i
+    ffsnd.update(indexFile, ffsnds_list, ffcmds_list)
     if not ffsnd.silent:
       ffmpeg_files += ffsnd.ffmpeg_file()
-      nsndfiles += 1
+      indexFile += 1
     sound_deltat += ffsnd.deltat
     print(ffsnd)
-  nfiles += nsndfiles
   overlay_deltat = 0.0
   for i, ffovl in enumerate(ffovls_list):
-    ffovl.update(nfiles, ffovls_list, ffcmds_list)
+    ffovl.index = i
+    ffovl.update(indexFile, ffovls_list, ffcmds_list)
     if not ffovl.blank:
       ffmpeg_files += ffovl.ffmpeg_file()
+      indexFile += 1
     overlay_deltat += ffovl.deltat
     print(ffovl)
   if len(ffsnds_list) > 0 and total_deltat != sound_deltat:
@@ -1146,6 +1156,10 @@ def merge_all_videos(ofile):
 #  with open("proj.sh", "wt") as f:
 #    f.write(ffcmd_str)
  
+def merge_all_videos(ofile):
+  ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
+  merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile) 
+
 def copySourceFiles(copyFolder):
   image_names = {}
   video_names = {}
