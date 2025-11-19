@@ -1091,8 +1091,10 @@ def merge_all_videos(ofile):
       ffmpeg_files += ffovl.ffmpeg_file()
     overlay_deltat += ffovl.deltat
     print(ffovl)
-  if total_deltat != sound_deltat or total_deltat != overlay_deltat:
-    raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat} overlay_deltat={overlay_deltat}")
+  if len(ffsnds_list) > 0 and total_deltat != sound_deltat:
+    raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat}")
+  if len(ffovls_list) > 0 and  total_deltat != overlay_deltat:
+    raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} overlay_deltat={overlay_deltat}")
   for i, ffcmd in enumerate(ffcmds_list):
     if i > 0 and ffcmd.overlay and ffcmds_list[i-1].create_out:
       raise RuntimeError(f"Incorrect overlay at {i}. previous fragment could not be overlayed")
@@ -1136,6 +1138,7 @@ def merge_all_videos(ofile):
   filters_str = ';'.join(ffmpeg_filters)
   ffmpeg_cmds += ['-filter_complex', filters_str]
   ffmpeg_cmds += ['-map', f"[{voutname}]", '-map', f"[{aoutname}]", ofile]
+#                  "-c:v", "libx265", "-an", "-x265-params", "crf=25", ofile]
   subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
   print(ffcmd_str)
