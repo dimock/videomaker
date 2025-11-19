@@ -641,6 +641,24 @@ class FFOverlay(FFBase):
     self.voutname = f"vovl{self.index}"
     self.overlay_filters = f"color={colorKey}:s={self.width}x{self.height}:d={self.deltat},setsar=1[{self.voutname}]"
 
+  def split_by_deltat(self, dt0):
+    dt1 = self.deltat - dt0
+    if dt1 < 0:
+      raise ValueError(f"{self.index} overlay duration is incorrect {dt1}")
+    ffovls = [None, None]
+    tstart = datetime.strptime(self.tstart, "%M:%S")
+    ddt0 = timedelta(seconds=dt0*self.frate)
+    if dt0 > 0:
+      ffovls[0] = deepcopy(self)
+      ffovls[0].deltat = dt0
+      ffovls[0].tstart = self.tstart
+    if dt1 > 0:
+      ffovls[1] = deepcopy(self)
+      ffovls[1].deltat = dt1
+      ffovls[1].tstart = (tstart + ddt0).strftime("%M:%S")
+    return ffovls
+
+
   def ffmpeg_filter(self):
     if self.blank:
       self.blank_filter()
@@ -1179,12 +1197,6 @@ def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
         if dt0 < 0:
           raise ValueError(f"duration of sound fragment at {ffsnd.index} is incorrect {dt0}")
         ffsnds = ffsnd.split_by_deltat(dt0)
-        print("ffsmds_list[i]")
-        print(ffsnds_list[i])
-        print("ffdnds[0]")
-        print(ffsnds[0])
-        print("ffsnds[1]")
-        print(ffsnds[1])
         del ffsnds_list[i]
         ffsnds_curr = ffsnds_list[:i]
         if ffsnds[0]:
@@ -1194,9 +1206,33 @@ def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
           ffsnds_list.insert(0, ffsnds[1])
         break
     print("snds_duration", snds_duration)
-    fragments += [[ffcmds_curr, ffsnds_curr, []]]
+    ovls_duration = 0.0
+    ffovls_curr = []
+    for i, ffovl in enumerate(ffovls_list):
+      ovls_duration += ffovl.deltat
+      if ovls_duration > cmds_duration:
+        dt0 = ffovl.deltat - (ovls_duration-cmds_duration)
+        if dt0 < 0:
+          raise ValueError(f"duration of overlay fragment at {ffovl.index} is incorrect {dt0}")
+        ffovls = ffovl.split_by_deltat(dt0)
+#        print("ffsmds_list[i]")
+#        print(ffsnds_list[i])
+#        print("ffdnds[0]")
+#        print(ffsnds[0])
+#        print("ffsnds[1]")
+#        print(ffsnds[1])
+        del ffovls_list[i]
+        ffovls_curr = ffovls_list[:i]
+        if ffovls[0]:
+          ffovls_curr.append(ffovls[0])
+        del ffovls_list[:i]
+        if ffovls[1]:
+          ffovls_list.insert(0, ffovls[1])
+        break
+    print("ovls_duration", ovls_duration)
+    fragments += [[ffcmds_curr, ffsnds_curr, ffovls_curr]]
   if len(ffcmds_list) > 0:
-    fragments += [[ffcmds_list, ffsnds_list, []]]
+    fragments += [[ffcmds_list, ffsnds_list, ffovls_list]]
   return fragments
 
 
