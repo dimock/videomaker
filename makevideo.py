@@ -15,6 +15,7 @@ frameRate = 25
 ffmpeg_name = "ffmpeg"
 ffprobe_name = "ffprobe"
 colorKey = "white"
+fragment_size = 10
 
 with open( os.path.splitext(os.path.basename(__file__))[0] + ".cfg", "rt") as f:
   for line in f.readlines():
@@ -45,12 +46,15 @@ with open( os.path.splitext(os.path.basename(__file__))[0] + ".cfg", "rt") as f:
         ffprobe_name = value
       if key == "COLOR_KEY":
         colorKey = value
+      if key == "FRAGMENT_SIZE":
+        fragment_size = int(value)
 
 parser = argparse.ArgumentParser("Simple video maker based on ffmpeg")
 parser.add_argument('-s', help='Source moves folder', default="src", type=str, dest='sourceFolder')
 parser.add_argument('-im', help='Images folder', default="images", type=str, dest='imagesFolder')
 parser.add_argument('-sn', help='Sounds folder', default="sounds", type=str, dest='soundsFolder')
 parser.add_argument('-w', help='Working folder', default="work", type=str, dest='workingFolder')
+parser.add_argument('-tmp', help='Temporary folder', default="temp", type=str, dest='temporaryFolder')
 parser.add_argument('-pf', help='Projects folder', default=defaultProjectsFolder, type=str, dest='projectsFolder')
 parser.add_argument('-pn', help='Project name', default='proj1', type=str, dest='projectName')
 parser.add_argument('-o', help='Output moves folder', default="output", type=str, dest='outputFolder')
@@ -68,6 +72,7 @@ imagesFolder = os.path.join(projectFolder, args.imagesFolder)
 soundsFolder = os.path.join(projectFolder, args.soundsFolder)
 sourceFolder = os.path.join(projectFolder, args.sourceFolder)
 workingFolder = os.path.join(projectFolder, args.workingFolder)
+temporaryFolder = os.path.join(projectFolder, args.temporaryFolder)
 outputFolder = os.path.join(projectFolder, args.outputFolder)
 configFileName = os.path.join(projectFolder, args.projectName+'.cfg')
 textsFileName = os.path.join(projectFolder, args.projectName+'.txt')
@@ -79,6 +84,8 @@ def make_project():
     os.makedirs(sourceFolder)
   if not os.path.exists(workingFolder):
     os.makedirs(workingFolder)
+  if not os.path.exists(temporaryFolder):
+    os.makedirs(temporaryFolder)
   if not os.path.exists(outputFolder):
     os.makedirs(outputFolder)
   if not os.path.exists(imagesFolder):
@@ -101,6 +108,12 @@ def read_time(s):
     return float(dt.total_seconds())
   except ValueError as e:
     return float(s)
+
+def cleanTemporaryFolder():
+  for file in filter(lambda x: os.path.splitext(x)[1] == videoExt or os.path.splitext(x)[1] == ".txt", os.listdir(temporaryFolder)):
+    print('delete', os.path.join(temporaryFolder, file))
+    os.remove(os.path.join(temporaryFolder, file))
+
 
 class FFText:
   text = ""
@@ -298,6 +311,26 @@ class FFSound:
     ffsnds += [ffsnd23]
     return ffsnds
  
+  def split_by_deltat(self, dt0):
+    dt1 = self.deltat - dt0
+    ffsnds = [None, None]
+    vcenter = self.vstart + (self.vend - self.vstart) * dt0 / self.deltat
+    if dt0 > 0:
+      ffsnds[0] = deepcopy(self)
+      ffsnds[0].tstart = self.tstart
+      ffsnds[0].tend = self.tstart + dt0
+      ffsnds[0].deltat = dt0
+      ffsnds[0].vstart = self.vstart
+      ffsnds[0].vend = vcenter
+    if dt1 > 0:
+      ffsnds[1] = deepcopy(self)
+      ffsnds[1].tstart = self.tstart + dt0
+      ffsnds[1].tend = self.tend
+      ffsnds[1].deltat = dt1
+      ffsnds[1].vstart = vcenter
+      ffsnds[1].vend = self.vend
+    return ffsnds
+
 
   def ffmpeg_filter(self):
     if self.silent:
@@ -349,6 +382,7 @@ class FFSound:
         tfilters += [ f"afade=t=in:d={t1-t0}:silence={v0}:unity={v1}" ]
       elif v1 < v0:
         tfilters += [ f"afade=t=out:d={t1-t0}:silence={v1}:unity={v0}" ]
+      tfilters += [f"aresample={self.asample_rate}"]
       ffsnd_filters += [ ",".join(tfilters) + f"[{avname}]" ]
       avnames += [ f"[{avname}]" ]
     if len(tt) > 1:
@@ -376,6 +410,7 @@ class FFBase:
   crop = False
   asample_rate= audioSampleRate
   vcodec = videoCodec
+  framerate = frameRate
 
   def __init__(self, index, ifname, tvideo):
     self.index = index
@@ -408,6 +443,8 @@ class FFBase:
               self.iheight = int(value)
           if key == "codec_name":
             self.vcodec = value
+          if key == "r_frame_rate":
+            self.framerate = int(eval(value))
       elif len(list(filter(lambda x: len(x) > 1 and x[0].lstrip().rstrip() =="codec_type" and x[1].lstrip().rstrip() == "audio", strm))) > 0:
         for vals in strm:
           if len(vals) < 2:
@@ -490,7 +527,7 @@ class FFCmd(FFBase):
         video_filters += [f"scale={self.width}:{self.height},setsar=1"]
       audio_filters += [f"[{self.icmd}:a]atempo={self.frate},volume={self.volume}"]
     elif self.tcolor:
-      video_filters += [f"color={self.color}:s={self.width}x{self.height}:d={self.deltat},setsar=1"]
+      video_filters += [f"color={self.color}:s={self.width}x{self.height}:d={self.deltat},fps={self.framerate},setsar=1"]
       audio_filters += [f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}"]
     else: # image
       video_prefix = f"[{self.icmd}:v]"
@@ -501,7 +538,7 @@ class FFCmd(FFBase):
         cy = int(self.iheight*self.cropy/100)
         video_filters += [f"{video_prefix}crop={cw}:{ch}:{cx}:{cy}"]
         video_prefix = ""
-      video_filters += [f"{video_prefix}scale={self.width}:{self.height},setsar=1"]
+      video_filters += [f"{video_prefix}scale={self.width}:{self.height},fps={self.framerate},setsar=1"]
       audio_filters += [f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}"]
     vname1,aname1 = vname,aname
     for i in self.itexts:
@@ -531,7 +568,7 @@ class FFCmd(FFBase):
     if self.tvideo:
       return ['-i', self.fname]
     elif not self.tcolor:
-      return ['-loop', '1', '-t', f"{self.deltat}", "-i", self.ifname]
+      return ['-loop', '1', '-framerate', f"{self.framerate}", '-t', f"{self.deltat}", "-i", self.ifname]
     else:
       return None
 
@@ -1019,16 +1056,22 @@ def generate_ffcmds_list():
   width = videoWidth
   height = videoHeight
   vcodec = videoCodec
+  asample_rate = audioSampleRate
+  framerate = frameRate
   for ffcmd in ffcmds_list:
     if ffcmd.tvideo:
       width = ffcmd.width
       height = ffcmd.height
+      asample_rate = ffcmd.asample_rate
+      framerate = ffcmd.framerate
       break
   for ffcmd in ffcmds_list:
     ffcmd.texts = texts
     ffcmd.width = width
     ffcmd.height = height
     ffcmd.vcodec = vcodec
+    ffcmd.asample_rate = asample_rate
+    ffcmd.framerate = framerate
   for ffovl in ffovls_list:
     if ffovl.ioverlay_start < len(ffcmds_list) and ffcmds_list[ffovl.ioverlay_start].fadet > 0:
       ffovl.ioverlay_start += 1
@@ -1099,12 +1142,63 @@ def generate_ffcmds_list():
         i += 1
     else:
       i += 1
+  for i, ffsnd in enumerate(ffsnds_list):
+    ffsnd.index = i
+    ffsnd.asample_rate = asample_rate
   for i, ffovl in enumerate(ffovls_list):
     ffovl.index = i
     ffovl.width = width
     ffovl.height = height
+    ffovl.framerate = framerate
     ffovl.calculate_deltat(ffcmds_list)
   return ffcmds_list, ffsnds_list, ffovls_list
+
+def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
+  if fragment_size < 2:
+    return [[ffcmds_list, ffsnds_list, ffovls_list]]
+  fragments = []
+  while len(ffcmds_list) > fragment_size:
+    n = fragment_size
+    if not ffcmds_list[n-1].create_out:
+      n -= 1
+      if not ffcmds_list[n-1].create_out:
+        raise IndexError(f"two neighbour fragments in sequence don't generate output at {icurr}")
+    ffcmds_curr = ffcmds_list[:n]
+    del ffcmds_list[:n]
+    cmds_duration = 0.0
+    for ffcmd in ffcmds_curr:
+      if ffcmd.create_out:
+        cmds_duration += ffcmd.deltat
+    print("cmds_duration", cmds_duration)
+    snds_duration = 0.0
+    ffsnds_curr = []
+    for i, ffsnd in enumerate(ffsnds_list):
+      snds_duration += ffsnd.deltat
+      if snds_duration > cmds_duration:
+        dt0 = ffsnd.deltat - (snds_duration-cmds_duration)
+        if dt0 < 0:
+          raise ValueError(f"duration of sound fragment at {ffsnd.index} is incorrect {dt0}")
+        ffsnds = ffsnd.split_by_deltat(dt0)
+        print("ffsmds_list[i]")
+        print(ffsnds_list[i])
+        print("ffdnds[0]")
+        print(ffsnds[0])
+        print("ffsnds[1]")
+        print(ffsnds[1])
+        del ffsnds_list[i]
+        ffsnds_curr = ffsnds_list[:i]
+        if ffsnds[0]:
+          ffsnds_curr.append(ffsnds[0])
+        del ffsnds_list[:i]
+        if ffsnds[1]:
+          ffsnds_list.insert(0, ffsnds[1])
+        break
+    print("snds_duration", snds_duration)
+    fragments += [[ffcmds_curr, ffsnds_curr, []]]
+  if len(ffcmds_list) > 0:
+    fragments += [[ffcmds_list, ffsnds_list, []]]
+  return fragments
+
 
 def cut_all_videos():
   ffcmds_list, _, _ = generate_ffcmds_list()
@@ -1122,6 +1216,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   width = videoWidth
   height = videoHeight
   indexFile = 0
+  print("ffcmds")
   for i, ffcmd in enumerate(ffcmds_list):
     ffcmd.index = i
     ffcmd.update_index(indexFile)
@@ -1136,6 +1231,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
       ffmpeg_files += ffcmd_file
     print(ffcmd)
   sound_deltat = 0.0
+  print("ffsnds")
   for i, ffsnd in enumerate(ffsnds_list):
     ffsnd.index = i
     ffsnd.update_index(indexFile)
@@ -1145,6 +1241,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
     sound_deltat += ffsnd.deltat
     print(ffsnd)
   overlay_deltat = 0.0
+  print("ffovls")
   for i, ffovl in enumerate(ffovls_list):
     ffovl.index = i
     ffovl.update_index(indexFile)
@@ -1199,7 +1296,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   ffmpeg_cmds += ffmpeg_files
   filters_str = ';'.join(ffmpeg_filters)
   ffmpeg_cmds += ['-filter_complex', filters_str]
-  ffmpeg_cmds += ['-map', f"[{voutname}]", '-map', f"[{aoutname}]", ofile]
+  ffmpeg_cmds += ['-map', f"[{voutname}]", '-map', f"[{aoutname}]", "-r", "30", "-video_track_timescale", "90000", ofile]
 #                  "-c:v", "libx265", "-an", "-x265-params", "crf=25", ofile]
   subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
@@ -1209,8 +1306,24 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
 #    f.write(ffcmd_str)
  
 def merge_all_videos(ofile):
+  cleanTemporaryFolder()
   ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
-  merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile) 
+  fragments = split_fragments(ffcmds_list, ffsnds_list, ffovls_list)
+  filenames = []
+  for i, frag in enumerate(fragments):
+    ffile = os.path.join(temporaryFolder, "temp_" + str(i) + videoExt)
+    filenames += [ffile]
+    merge_part(frag[0], frag[1], frag[2], ffile)
+  listFile = os.path.join(temporaryFolder, "files.txt")
+  with open(listFile, "wt") as f:
+    for fnm in filenames:
+      f.write(f"file '{fnm}'\n")
+  ffmpeg_cmds = [ffmpeg_name, "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", ofile]
+  subprocess.run(ffmpeg_cmds, cwd=projectFolder)
+  ffcmd_str =  " ".join(ffmpeg_cmds)
+#ffmpeg -i temp/temp_1.mp4 -video_track_timescale 15360 -vf fps=30 temp/temp_1_f.mp4
+  print(ffcmd_str)
+ 
 
 def copySourceFiles(copyFolder):
   image_names = {}
@@ -1258,7 +1371,7 @@ def cleanWorkingFolder():
     os.remove(os.path.join(workingFolder, file))
 
 if __name__ == "__main__":
-  try:
+  #  try:
     if args.makeProject:
       make_project()
     if os.path.exists(args.copyFolder):
@@ -1269,5 +1382,5 @@ if __name__ == "__main__":
       cut_all_videos()
     if args.mergeVideos:
       merge_all_videos( os.path.join(outputFolder, args.outputFile) )
-  except Exception as e:
-    print("error: ", e)
+#  except Exception as e:
+#    print("error: ", e)
