@@ -823,8 +823,6 @@ def create_ffcmds(p, index, bfadet=0.0):
   ffcmd2.itexts = itexts
   dt2 = dt - bfdt - efdt
   if dt2.total_seconds() < 0:
-    print(f"fadet={fadet} bfadet={bfadet} dt={dt} t0={t0} t1={t1}")
-    print(ffcmd2)
     raise ValueError(f"fragment duration {dt2.total_seconds()} is incorrect for {fname} at {index}")
   ffcmd2.tdelta =  ':'.join(str(dt2).split(':')[1:])
   ffcmd2.deltat = dt2.total_seconds()/frate
@@ -1187,7 +1185,6 @@ def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
     for ffcmd in ffcmds_curr:
       if ffcmd.create_out:
         cmds_duration += ffcmd.deltat
-    print("cmds_duration", cmds_duration)
     snds_duration = 0.0
     ffsnds_curr = []
     for i, ffsnd in enumerate(ffsnds_list):
@@ -1205,7 +1202,6 @@ def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
         if ffsnds[1]:
           ffsnds_list.insert(0, ffsnds[1])
         break
-    print("snds_duration", snds_duration)
     ovls_duration = 0.0
     ffovls_curr = []
     for i, ffovl in enumerate(ffovls_list):
@@ -1215,12 +1211,6 @@ def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
         if dt0 < 0:
           raise ValueError(f"duration of overlay fragment at {ffovl.index} is incorrect {dt0}")
         ffovls = ffovl.split_by_deltat(dt0)
-#        print("ffsmds_list[i]")
-#        print(ffsnds_list[i])
-#        print("ffdnds[0]")
-#        print(ffsnds[0])
-#        print("ffsnds[1]")
-#        print(ffsnds[1])
         del ffovls_list[i]
         ffovls_curr = ffovls_list[:i]
         if ffovls[0]:
@@ -1229,7 +1219,6 @@ def split_fragments(ffcmds_list, ffsnds_list, ffovls_list):
         if ffovls[1]:
           ffovls_list.insert(0, ffovls[1])
         break
-    print("ovls_duration", ovls_duration)
     fragments += [[ffcmds_curr, ffsnds_curr, ffovls_curr]]
   if len(ffcmds_list) > 0:
     fragments += [[ffcmds_list, ffsnds_list, ffovls_list]]
@@ -1252,7 +1241,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   width = videoWidth
   height = videoHeight
   indexFile = 0
-  print("ffcmds")
+#  print("ffcmds")
   for i, ffcmd in enumerate(ffcmds_list):
     ffcmd.index = i
     ffcmd.update_index(indexFile)
@@ -1265,9 +1254,9 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
     if ffcmd_file:
       indexFile += 1
       ffmpeg_files += ffcmd_file
-    print(ffcmd)
+#    print(ffcmd)
   sound_deltat = 0.0
-  print("ffsnds")
+#  print("ffsnds")
   for i, ffsnd in enumerate(ffsnds_list):
     ffsnd.index = i
     ffsnd.update_index(indexFile)
@@ -1275,9 +1264,9 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
       ffmpeg_files += ffsnd.ffmpeg_file()
       indexFile += 1
     sound_deltat += ffsnd.deltat
-    print(ffsnd)
+#    print(ffsnd)
   overlay_deltat = 0.0
-  print("ffovls")
+#  print("ffovls")
   for i, ffovl in enumerate(ffovls_list):
     ffovl.index = i
     ffovl.update_index(indexFile)
@@ -1285,7 +1274,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
       ffmpeg_files += ffovl.ffmpeg_file()
       indexFile += 1
     overlay_deltat += ffovl.deltat
-    print(ffovl)
+#    print(ffovl)
   if len(ffsnds_list) > 0 and total_deltat != sound_deltat:
     raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat}")
   if len(ffovls_list) > 0 and  total_deltat != overlay_deltat:
@@ -1346,10 +1335,12 @@ def merge_all_videos(ofile):
   ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
   fragments = split_fragments(ffcmds_list, ffsnds_list, ffovls_list)
   filenames = []
+  ffcmds_num = 0
   for i, frag in enumerate(fragments):
     ffile = os.path.join(temporaryFolder, "temp_" + str(i) + videoExt)
     filenames += [ffile]
     merge_part(frag[0], frag[1], frag[2], ffile)
+    ffcmds_num += len(frag[0])
   listFile = os.path.join(temporaryFolder, "files.txt")
   with open(listFile, "wt") as f:
     for fnm in filenames:
@@ -1357,6 +1348,7 @@ def merge_all_videos(ofile):
   ffmpeg_cmds = [ffmpeg_name, "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", ofile]
   subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
+  print("total fragments =", ffcmds_num)
 #ffmpeg -i temp/temp_1.mp4 -video_track_timescale 15360 -vf fps=30 temp/temp_1_f.mp4
   print(ffcmd_str)
  
