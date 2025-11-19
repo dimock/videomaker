@@ -411,6 +411,7 @@ class FFBase:
   asample_rate= audioSampleRate
   vcodec = videoCodec
   framerate = frameRate
+  duration = 0.0
 
   def __init__(self, index, ifname, tvideo):
     self.index = index
@@ -445,6 +446,11 @@ class FFBase:
             self.vcodec = value
           if key == "r_frame_rate":
             self.framerate = int(eval(value))
+          try:
+            if key == "duration" and self.duration == 0:
+              self.duration = float(value)
+          except ValueError:
+            pass
       elif len(list(filter(lambda x: len(x) > 1 and x[0].lstrip().rstrip() =="codec_type" and x[1].lstrip().rstrip() == "audio", strm))) > 0:
         for vals in strm:
           if len(vals) < 2:
@@ -509,6 +515,17 @@ class FFCmd(FFBase):
       return
     cmdarr = [ffmpeg_name, '-ss', self.tstart,  '-i', self.ifname, '-c', 'copy', '-t', self.tdelta, self.fname]
     subprocess.run(cmdarr, cwd=projectFolder)
+
+  def verify(self):
+    if self.tvideo:
+      tstart = datetime.strptime(self.tstart, "%M:%S")
+      dt = timedelta(seconds=self.deltat*self.frate) 
+      tend = tstart + dt
+      tdur = timedelta(minutes=tend.minute, seconds=tend.second)
+      stend = tend.strftime('%M:%S')
+      sduration = str(timedelta(seconds=self.duration))
+      if tdur.total_seconds() > self.duration:
+        raise ValueError(f"{self.index}  {self.ifname} fragment end time {stend} is greater than clip duration {sduration}")
 
 
   def ffmpeg_filter(self):
@@ -633,6 +650,15 @@ class FFOverlay(FFBase):
     for i in range(self.ioverlay_start, self.ioverlay_end):
       if ffcmds_list[i].create_out:
         self.deltat += ffcmds_list[i].deltat
+    if self.tvideo:
+      tstart = datetime.strptime(self.tstart, "%M:%S")
+      dt = timedelta(seconds=self.deltat*self.frate)
+      tend = tstart + dt
+      tdur = timedelta(minutes=tend.minute, seconds=tend.second)
+      stend = tend.strftime('%M:%S')
+      sduration = str(timedelta(seconds=self.duration))
+      if tdur.total_seconds() > self.duration:
+        raise ValueError(f"{self.index} {self.ifname} overlay end time {stend} is greater than clip duration {sduration}")
 
   def update_index(self, ioverlay):
     self.ioverlay = ioverlay
@@ -1088,6 +1114,7 @@ def generate_ffcmds_list():
     ffcmd.vcodec = vcodec
     ffcmd.asample_rate = asample_rate
     ffcmd.framerate = framerate
+    ffcmd.verify()
   for ffovl in ffovls_list:
     if ffovl.ioverlay_start < len(ffcmds_list) and ffcmds_list[ffovl.ioverlay_start].fadet > 0:
       ffovl.ioverlay_start += 1
@@ -1399,7 +1426,7 @@ def cleanWorkingFolder():
     os.remove(os.path.join(workingFolder, file))
 
 if __name__ == "__main__":
-  #  try:
+  try:
     if args.makeProject:
       make_project()
     if os.path.exists(args.copyFolder):
@@ -1410,5 +1437,5 @@ if __name__ == "__main__":
       cut_all_videos()
     if args.mergeVideos:
       merge_all_videos( os.path.join(outputFolder, args.outputFile) )
-#  except Exception as e:
-#    print("error: ", e)
+  except Exception as e:
+    print("error: ", e)
