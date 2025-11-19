@@ -2,6 +2,7 @@
 
 import os, string, os.path, sys, re, argparse, subprocess, shutil, math
 from datetime import datetime, timedelta
+from copy import deepcopy
 
 defaultProjectsFolder = ""
 partPrefix = 'p'
@@ -186,6 +187,8 @@ class FFSound:
   isound = -1
   tstart = 0.0
   tend = 0.0
+  vstart = 0.0
+  vend = 0.0
   tfade = 0.0
   fname = ''
   svolume = 0.0
@@ -223,14 +226,16 @@ class FFSound:
         if key == "duration":
           self.duration = math.floor(float(value))
 
-  def update(self, isound, ffsnds_list, ffcmds_list):
-    self.isound = isound
+  def calculate_deltat(self, ffcmds_list):
     self.deltat = 0.0
     for i in range(self.istart, self.iend):
       if ffcmds_list[i].create_out:
        self.deltat += ffcmds_list[i].deltat
     self.tend += self.deltat
  
+  def update_index(self, isound):
+    self.isound = isound
+
   def __repr__(self):
     s = []
     keys = set()
@@ -255,23 +260,55 @@ class FFSound:
     self.aoutname = f"asnd{self.index}"
     self.sound_filter = f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}[{self.aoutname}]"
 
+  def split_by_fade(self):
+    if self.silent or self.tfade <= 0:
+      return None
+    if self.deltat < 2*self.tfade:
+      raise ValueError(f"audio time duration {self.deltat} less then fade time {self.tfade} at position {self.istart}")
+    t0 = self.tstart
+    t1 = self.tstart + self.tfade
+    t2 = self.tend - self.tfade
+    t3 = self.tend
+    v0 = 0.0
+    v1 = 1.0
+    v2 = 1.0
+    v3 = 0.0
+    ffsnds = []
+    ffsnd01 = deepcopy(self)
+    ffsnd01.tstart = t0
+    ffsnd01.tend = t1
+    ffsnd01.vstart = v0
+    ffsnd01.vend = v1
+    ffsnd01.deltat = t1 - t0
+    ffsnds += [ffsnd01]
+    if t2 > t1:
+      ffsnd12 = deepcopy(self)
+      ffsnd12.tstart = t1
+      ffsnd12.tend = t2
+      ffsnd12.vstart = v1
+      ffsnd12.vend = v2
+      ffsnd12.deltat = t2 - t1
+      ffsnds += [ffsnd12]
+    ffsnd23 = deepcopy(self)
+    ffsnd23.tstart = t2
+    ffsnd23.tend = t3
+    ffsnd23.vstart = v2
+    ffsnd23.vend = v3
+    ffsnd23.deltat = t3 - t2
+    ffsnds += [ffsnd23]
+    return ffsnds
+ 
+
   def ffmpeg_filter(self):
     if self.silent:
       self.ffsilent_filter()
       return
     asndname = f"asnd{self.index}"
     t0 = self.tstart
-    t1 = self.tstart + self.tfade
-    t2 = self.tend - self.tfade
-    t3 = self.tend
-    if t2 < t0:
-      raise ValueError(f"audio time {t0} {t2} incorrect for {self.fname} at position {self.istart}")
-    tt = []
-    if self.tfade > 0:
-      tt += [[t0, t1, 0.0, 1.0]]
-    tt += [[t1, t2, 1.0, 1.0]]
-    if self.tfade > 0:
-      tt += [[t2, t3, 1.0, 0.0]]
+    t1 = self.tend
+    if t1 < t0:
+      raise ValueError(f"audio time {t0} {t1} incorrect for {self.fname} at position {self.istart}")
+    tt = [[t0, t1, self.vstart, self.vend]]
     i = 0
     while i < len(tt):
       if tt[i][1] < tt[i][0]:
@@ -487,7 +524,7 @@ class FFCmd(FFBase):
       self.voutname = vname
       self.aoutname = aname
 
-  def update(self, icmd):
+  def update_index(self, icmd):
     self.icmd = icmd
 
   def ffmpeg_file(self):
@@ -554,12 +591,14 @@ class FFOverlay(FFBase):
     else:
       return ['-loop', '1', '-t', f"{self.deltat}", "-i", self.ifname]
 
-  def update(self, ioverlay, ffoverlays_list, ffcmds_list):
-    self.ioverlay = ioverlay
+  def calculate_deltat(self, ffcmds_list):
     self.deltat = 0.0
     for i in range(self.ioverlay_start, self.ioverlay_end):
       if ffcmds_list[i].create_out:
         self.deltat += ffcmds_list[i].deltat
+
+  def update_index(self, ioverlay):
+    self.ioverlay = ioverlay
  
   def blank_filter(self):
     self.voutname = f"vovl{self.index}"
@@ -1048,10 +1087,23 @@ def generate_ffcmds_list():
     ffsnds_list.append(s)
   for i, ffsnd in enumerate(ffsnds_list):
     ffsnd.index = i
+    ffsnd.calculate_deltat(ffcmds_list)
+  i = 0
+  while i < len(ffsnds_list):
+    ffsnd = ffsnds_list[i]
+    ffsnds = ffsnd.split_by_fade()
+    if ffsnds:
+      del ffsnds_list[i]
+      for s in ffsnds:
+        ffsnds_list.insert(i, s)
+        i += 1
+    else:
+      i += 1
   for i, ffovl in enumerate(ffovls_list):
     ffovl.index = i
     ffovl.width = width
     ffovl.height = height
+    ffovl.calculate_deltat(ffcmds_list)
   return ffcmds_list, ffsnds_list, ffovls_list
 
 def cut_all_videos():
@@ -1072,7 +1124,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   indexFile = 0
   for i, ffcmd in enumerate(ffcmds_list):
     ffcmd.index = i
-    ffcmd.update(indexFile)
+    ffcmd.update_index(indexFile)
     if ffcmd.tvideo:
       width = ffcmd.width
       height = ffcmd.height
@@ -1086,7 +1138,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   sound_deltat = 0.0
   for i, ffsnd in enumerate(ffsnds_list):
     ffsnd.index = i
-    ffsnd.update(indexFile, ffsnds_list, ffcmds_list)
+    ffsnd.update_index(indexFile)
     if not ffsnd.silent:
       ffmpeg_files += ffsnd.ffmpeg_file()
       indexFile += 1
@@ -1095,7 +1147,7 @@ def merge_part(ffcmds_list, ffsnds_list, ffovls_list, ofile):
   overlay_deltat = 0.0
   for i, ffovl in enumerate(ffovls_list):
     ffovl.index = i
-    ffovl.update(indexFile, ffovls_list, ffcmds_list)
+    ffovl.update_index(indexFile)
     if not ffovl.blank:
       ffmpeg_files += ffovl.ffmpeg_file()
       indexFile += 1
