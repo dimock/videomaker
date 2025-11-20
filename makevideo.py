@@ -67,6 +67,8 @@ parser.add_argument('-mg', help='Merge all video parts', action="store_true", de
 parser.add_argument('-c', help='Cut all videos', action="store_true", dest='cutVideos')
 parser.add_argument('-clean', help='Clean temporary video fragments in working folder', action="store_true", dest='cleanTemp')
 parser.add_argument('-cpy', help='Copy source files from given folder according to project configuration', default="", type=str, dest='copyFolder')
+parser.add_argument('-tl', help='Print time lines', action="store_true", dest='timeLines')
+
 
 args = parser.parse_args(sys.argv[1:])
 
@@ -480,9 +482,11 @@ class FFCmd(FFBase):
   texts = []
   tcolor = False
   color = ""
+  iline = -1
 
-  def __init__(self, index, ifname, tvideo):
+  def __init__(self, iline, index, ifname, tvideo):
     super().__init__(index, ifname, tvideo)
+    self.iline = iline
     self.fname = os.path.join(workingFolder, partPrefix + "_" + str(self.index) + videoExt)
     if os.path.exists(self.ifname):
       p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', self.ifname], encoding='utf-8',stdout=subprocess.PIPE)
@@ -528,7 +532,7 @@ class FFCmd(FFBase):
       stend = tend.strftime('%M:%S')
       sduration = str(timedelta(seconds=self.duration))
       if tdur.total_seconds() > self.duration:
-        raise ValueError(f"{self.index}  {self.ifname} fragment end time {stend} is greater than clip duration {sduration}")
+        raise ValueError(f"{self.iline}  {self.ifname} fragment end time {stend} is greater than clip duration {sduration}")
 
 
   def ffmpeg_filter(self):
@@ -733,7 +737,7 @@ class FFOverlay(FFBase):
     self.voutname = vovlname
 
 
-def create_ffcmds(p, index, bfadet=0.0):
+def create_ffcmds(p, iline, index, bfadet=0.0):
   index0 = 1
   fname = p[0]
   tcolor = False
@@ -801,7 +805,7 @@ def create_ffcmds(p, index, bfadet=0.0):
     crop = False
     tvideo = False
   if crop and (cropx < 0 or cropx + cropw > 100 or cropy < 0 or cropy + croph > 100):
-    raise ValueError(f"{ifile} at {index} incorrect crop values {cropx} {cropy} {cropw} {croph}")
+    raise ValueError(f"{ifile} at {iline} incorrect crop values {cropx} {cropy} {cropw} {croph}")
   if not tvideo:
     frate = 1.0
     if not tcolor:
@@ -819,12 +823,12 @@ def create_ffcmds(p, index, bfadet=0.0):
   if fadedown > 0:
     fadet = fadedown
   if fadet < 0:
-    raise ValueError(f"incorrect fade time {fadet} for file {fname}")
+    raise ValueError(f"{iline} incorrect fade time {fadet} for file {fname}")
   bfdt = timedelta(seconds=bfadet*frate)
   efdt = timedelta(seconds=fadet*frate)
   first = index == 0
   if bfadet > 0:
-    ffcmd1 = FFCmd(index, ifname, tvideo)
+    ffcmd1 = FFCmd(iline, index, ifname, tvideo)
     index += 1
     ffcmd1.fadet = bfadet
     ffcmd1.frate = frate
@@ -844,7 +848,7 @@ def create_ffcmds(p, index, bfadet=0.0):
     ffcmd1.tcolor = tcolor
     ffcmd1.color = color
     ffcmds.append(ffcmd1)
-  ffcmd2 = FFCmd(index, ifname, tvideo)
+  ffcmd2 = FFCmd(iline, index, ifname, tvideo)
   index += 1
   ffcmd2.frate = frate
   ffcmd2.volume = volume
@@ -852,7 +856,7 @@ def create_ffcmds(p, index, bfadet=0.0):
   ffcmd2.itexts = itexts
   dt2 = dt - bfdt - efdt
   if dt2.total_seconds() < 0:
-    raise ValueError(f"fragment duration {dt2.total_seconds()} is incorrect for {fname} at {index}")
+    raise ValueError(f"fragment duration {dt2.total_seconds()} is incorrect for {fname} at {iline}")
   ffcmd2.tdelta =  ':'.join(str(dt2).split(':')[1:])
   ffcmd2.deltat = dt2.total_seconds()/frate
   ffcmd2.tvideo = tvideo
@@ -865,7 +869,7 @@ def create_ffcmds(p, index, bfadet=0.0):
   ffcmd2.color = color
   ffcmds.append(ffcmd2)
   if fadet > 0:
-    ffcmd3 = FFCmd(index, ifname, tvideo)
+    ffcmd3 = FFCmd(iline, index, ifname, tvideo)
     index += 1
     ffcmd3.fadet = fadedown
     ffcmd3.frate = frate
@@ -1059,15 +1063,16 @@ def generate_ffcmds_list():
   ffovls_list = []
   with open(configFileName, 'rt') as f:
     parsed = []
-    for line in f.readlines():
+    lines = f.readlines()
+    for line in lines:
       l = line.lstrip().rstrip()
-      if len(l) == 0 or l[0] == '#':
-        continue
-      p = l.split()
-      if len(p) == 0:
-        continue
+      p = []
+      if len(l) >  0 and l[0] != '#':
+        p = l.split()
       parsed.append(p)
     for i, p in enumerate(parsed):
+      if len(p) == 0:
+        continue
       s = create_ffsound(p, index)
       if s:
         if s == -1:
@@ -1090,7 +1095,7 @@ def generate_ffcmds_list():
           ioverlay += 1
           ffovls_list.append(o)
         continue 
-      r = create_ffcmds(p, index, fadet)
+      r = create_ffcmds(p, i, index, fadet)
       index, ffcmds, fadet = r[0], r[1], r[2]
       for ffcmd in ffcmds:
         if not ffcmd.tcolor:
@@ -1396,7 +1401,7 @@ def merge_all_videos(ofile):
     print(" ".join(ffmpeg_cmds))
   print("total fragments =", ffcmds_num, "framerate", framerate)
 
-def youtube_encode(ifile, ofile)
+def youtube_encode(ifile, ofile):
   ffmpeg_cmds = [ffmpeg_name, "-i", ifile, "-vf", "format=yuv420p", "-force_key_frames", "'expr:gte(t,n_forced/2)'", "-c:v", "libx264", "-crf", "18", "-bf", "2", "-c:a", "aac", "-q:a", "1", "-ac", "2", "-ar", "48000", "-use_editlist", "0", "-movflags", "+faststart", ofile]
   subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   print(" ".join(ffmpeg_cmds))
@@ -1449,6 +1454,31 @@ def cleanWorkingFolder():
     print('delete', os.path.join(workingFolder, file))
     os.remove(os.path.join(workingFolder, file))
 
+def printTimelines():
+  ffcmds_list,_ ,_ = generate_ffcmds_list()
+  deltat = 0.0
+  timelines = {}
+  nlines = 0
+  for ffcmd in ffcmds_list:
+    if not ffcmd.create_out:
+      continue
+    if not ffcmd.iline in timelines:
+      timelines[ffcmd.iline] = [ffcmd.deltat, ffcmd.ifname, ffcmd.tstart]
+    else:
+      timelines[ffcmd.iline][0] += ffcmd.deltat
+    nlines = max(ffcmd.iline, nlines)
+  for i in range(0, nlines+1):
+    if i in timelines:
+      t = timelines[i]
+    else:
+      print(f"{i+1}: #")
+      continue
+    deltat += t[0]
+    fname = os.path.basename(t[1])
+    dt = datetime.strptime("00:00:00", "%H:%M:%S") + timedelta(seconds=deltat)
+    sdt = dt.strftime("%M:%S")
+    print(f"{i+1}: {sdt}: {fname} {t[2]}")
+
 if __name__ == "__main__":
   try:
     if args.makeProject:
@@ -1461,5 +1491,7 @@ if __name__ == "__main__":
       cut_all_videos()
     if args.mergeVideos:
       merge_all_videos( os.path.join(outputFolder, args.outputFile) )
+    if args.timeLines:
+      printTimelines()
   except Exception as e:
     print("error: ", e)
