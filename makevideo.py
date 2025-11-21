@@ -657,6 +657,8 @@ class FFOverlay(FFBase):
     for i in range(self.ioverlay_start, self.ioverlay_end):
       if ffcmds_list[i].create_out:
         self.deltat += ffcmds_list[i].deltat
+
+  def verify(self):
     if self.tvideo:
       tstart = datetime.strptime(self.tstart, "%M:%S")
       dt = timedelta(seconds=self.deltat*self.frate)
@@ -1123,7 +1125,6 @@ def generate_ffcmds_list():
     ffcmd.vcodec = vcodec
     ffcmd.asample_rate = asample_rate
     ffcmd.framerate = framerate
-    ffcmd.verify()
     if ffcmd.create_out:
       total_deltat += ffcmd.deltat
   for ffovl in ffovls_list:
@@ -1151,6 +1152,7 @@ def generate_ffcmds_list():
       ffovls_list.insert(i, o)
       i += 2
     else:
+      iprev = ffovl.ioverlay_end
       i += 1
   if len(ffovls_list) > 0 and ffovls_list[-1].ioverlay_end < len(ffcmds_list):
     o = FFOverlay("", False)
@@ -1175,6 +1177,7 @@ def generate_ffcmds_list():
       ffsnds_list.insert(i, s)
       i += 2
     else:
+      iprev = ffsnd.iend
       i += 1
   if len(ffsnds_list) > 0 and ffsnds_list[-1].iend < len(ffcmds_list):
     s = FFSound()
@@ -1253,6 +1256,7 @@ def split_fragments(ffcmds_list, ffovls_list):
 def cut_all_videos():
   ffcmds_list, _, _ = generate_ffcmds_list()
   for ffcmd in ffcmds_list:
+    ffcmd.verify()
     ffcmd.cut_video_part()
 
 def make_sound(ffsnds_list, osfile):
@@ -1369,6 +1373,10 @@ def merge_all_videos(ofile):
   ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
   framerate = frameRate
   asample_rate = audioSampleRate
+  for ffcmd in ffcmds_list:
+    ffcmd.verify()
+  for ffovl in ffovls_list:
+    ffovl.verify()
   for ffcmd in ffcmds_list:
     if ffcmd.tvideo:
       asample_rate = ffcmd.asample_rate
