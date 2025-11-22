@@ -106,13 +106,20 @@ def make_project():
       f.write("# Add texts here\n")
   print(f"Project {args.projectName} is created in {projectFolder}")
 
-def read_time(s):
+def read_datetime(s):
   try:
-    ts = datetime.strptime(s, "%M:%S")
-    dt = timedelta(minutes=ts.minute, seconds=ts.second)
-    return float(dt.total_seconds())
+    return datetime.strptime(s, "%M:%S")
   except ValueError as e:
-    return float(s)
+    try:
+      return datetime.strptime(s, "%M:%S.%f")
+    except ValueError as e:
+      return datetime.strptime("00:00", "%M:%S") + timedelta(microseconds=float(s)*1e6)
+
+def datetime2timedelta(t):
+  return timedelta(hours=t.hour, minutes=t.minute, seconds=t.second, microseconds=t.microsecond)
+
+def read_in_seconds(s):
+  return datetime2timedelta(read_datetime(s)).total_seconds()
 
 def cleanTemporaryFolder():
   for file in filter(lambda x: os.path.splitext(x)[1] == videoExt or os.path.splitext(x)[1] == ".txt", os.listdir(temporaryFolder)):
@@ -483,6 +490,7 @@ class FFCmd(FFBase):
   tcolor = False
   color = ""
   iline = -1
+  base = False
 
   def __init__(self, iline, index, ifname, tvideo):
     super().__init__(index, ifname, tvideo)
@@ -525,11 +533,11 @@ class FFCmd(FFBase):
 
   def verify(self):
     if self.tvideo:
-      tstart = datetime.strptime(self.tstart, "%M:%S")
+      tstart = read_datetime(self.tstart)
       dt = timedelta(seconds=self.deltat*self.frate) 
       tend = tstart + dt
-      tdur = timedelta(minutes=tend.minute, seconds=tend.second)
-      stend = tend.strftime('%M:%S')
+      tdur = datetime2timedelta(tend)
+      stend = str(tend)
       sduration = str(timedelta(seconds=self.duration))
       if tdur.total_seconds() > self.duration:
         raise ValueError(f"{self.iline}  {self.ifname} fragment end time {stend} is greater than clip duration {sduration}")
@@ -660,11 +668,11 @@ class FFOverlay(FFBase):
 
   def verify(self):
     if self.tvideo:
-      tstart = datetime.strptime(self.tstart, "%M:%S")
+      tstart = read_datetime(self.tstart)
       dt = timedelta(seconds=self.deltat*self.frate)
       tend = tstart + dt
-      tdur = timedelta(minutes=tend.minute, seconds=tend.second)
-      stend = tend.strftime('%M:%S')
+      tdur = datetime2timedelta(tend)
+      stend = str(tend)
       sduration = str(timedelta(seconds=self.duration))
       if tdur.total_seconds() > self.duration:
         raise ValueError(f"{self.index} {self.ifname} overlay end time {stend} is greater than clip duration {sduration}")
@@ -681,7 +689,7 @@ class FFOverlay(FFBase):
     if dt1 < 0:
       raise ValueError(f"{self.index} overlay duration is incorrect {dt1}")
     ffovls = [None, None]
-    tstart = datetime.strptime(self.tstart, "%M:%S")
+    tstart = read_datetime(self.tstart)
     ddt0 = timedelta(seconds=dt0*self.frate)
     if dt0 > 0:
       ffovls[0] = deepcopy(self)
@@ -763,6 +771,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
   cropw, croph, cropx, cropy = 0.0, 0.0, 0.0, 0.0
   crop = False
   overlay_prev = False
+  base = False
   for i in range(index0, len(p), 2):
     if i+1 > len(p)-1:
       break
@@ -803,6 +812,8 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     if key == 'cropy':
       crop = True
       cropy = float(value)
+    if key == 'base':
+      base = int(value) != 0
   if tcolor:
     crop = False
     tvideo = False
@@ -812,8 +823,8 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     frate = 1.0
     if not tcolor:
       ifname = os.path.join(imagesFolder, fname)
-  t0 = datetime.strptime(st0, "%M:%S")
-  t1 = datetime.strptime(st1, "%M:%S")
+  t0 = read_datetime(st0)
+  t1 = read_datetime(st1)
   dt = t1 - t0
   if tvideo:
     deltat = dt.total_seconds()/frate
@@ -849,6 +860,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd1.crop = crop
     ffcmd1.tcolor = tcolor
     ffcmd1.color = color
+    ffcmd1.base = base
     ffcmds.append(ffcmd1)
   ffcmd2 = FFCmd(iline, index, ifname, tvideo)
   index += 1
@@ -904,7 +916,7 @@ def create_ffsound(p, index):
     value = p[i+1]
     if key == 'ast':
       ffsnd = FFSound()
-      ffsnd.tstart = ffsnd.tend = read_time(value)
+      ffsnd.tstart = ffsnd.tend = read_in_seconds(value)
     if key == 'sf':
       tfade = float(value)
     if key == 'v':
@@ -945,7 +957,7 @@ def create_ffoverlay(p, index):
       tvideo = True
       ifname = os.path.join(sourceFolder, fname)
       ffovl = FFOverlay(ifname, tvideo)
-      tstart = datetime.strptime(value, "%M:%S")
+      tstart = read_datetime(value)
     if key == 'r':
       frate = float(value)
     if key == 'cropw':
@@ -1112,7 +1124,7 @@ def generate_ffcmds_list():
   framerate = frameRate
   total_deltat = 0.0
   for ffcmd in ffcmds_list:
-    if ffcmd.tvideo:
+    if ffcmd.tvideo and ffcmd.base:
       width = ffcmd.width
       height = ffcmd.height
       asample_rate = ffcmd.asample_rate
@@ -1210,7 +1222,7 @@ def generate_ffcmds_list():
     ffovl.height = height
     ffovl.framerate = framerate
     ffovl.calculate_deltat(ffcmds_list)
-  if len(ffsnds_list) > 0 and total_deltat != sound_deltat:
+  if len(ffsnds_list) > 0 and math.fabs(total_deltat - sound_deltat) > 0.001:
     raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat}")
   return ffcmds_list, ffsnds_list, ffovls_list
 
@@ -1301,16 +1313,11 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
   ffsnds_anames = []
   ffovls_vnames = []
   total_deltat = 0.0
-  width = videoWidth
-  height = videoHeight
   indexFile = 0
 #  print("ffcmds")
   for i, ffcmd in enumerate(ffcmds_list):
     ffcmd.index = i
     ffcmd.update_index(indexFile)
-    if ffcmd.tvideo:
-      width = ffcmd.width
-      height = ffcmd.height
     if ffcmd.create_out:
       total_deltat += ffcmd.deltat
     ffcmd_file = ffcmd.ffmpeg_file()
@@ -1327,7 +1334,7 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
       indexFile += 1
     overlay_deltat += ffovl.deltat
 #    print(ffovl)
-  if len(ffovls_list) > 0 and  total_deltat != overlay_deltat:
+  if len(ffovls_list) > 0 and  math.fabs(total_deltat - overlay_deltat) > 0.001:
     raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} overlay_deltat={overlay_deltat}")
   for i, ffcmd in enumerate(ffcmds_list):
     if i > 0 and ffcmd.overlay and ffcmds_list[i-1].create_out:
@@ -1378,7 +1385,7 @@ def merge_all_videos(ofile):
   for ffovl in ffovls_list:
     ffovl.verify()
   for ffcmd in ffcmds_list:
-    if ffcmd.tvideo:
+    if ffcmd.tvideo and ffcmd.base:
       asample_rate = ffcmd.asample_rate
       framerate = ffcmd.framerate
       break 
@@ -1489,6 +1496,7 @@ def printTimelines():
 
 if __name__ == "__main__":
   try:
+    ts = datetime.now()
     if args.makeProject:
       make_project()
     if os.path.exists(args.copyFolder):
@@ -1501,5 +1509,6 @@ if __name__ == "__main__":
       merge_all_videos( os.path.join(outputFolder, args.outputFile) )
     if args.timeLines:
       printTimelines()
+    print(str(datetime.now()-ts))
   except Exception as e:
     print("error: ", e)
