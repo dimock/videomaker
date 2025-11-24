@@ -121,6 +121,12 @@ def datetime2timedelta(t):
 def read_in_seconds(s):
   return datetime2timedelta(read_datetime(s)).total_seconds()
 
+def datetime2string(t):
+  if t.microsecond > 0:
+    return t.strftime("%M:%S.%f")
+  else:
+    return t.strftime("%M:%S")
+
 def cleanTemporaryFolder():
   for file in filter(lambda x: os.path.splitext(x)[1] == videoExt or os.path.splitext(x)[1] == ".txt", os.listdir(temporaryFolder)):
     print('delete', os.path.join(temporaryFolder, file))
@@ -698,7 +704,7 @@ class FFOverlay(FFBase):
     if dt1 > 0:
       ffovls[1] = deepcopy(self)
       ffovls[1].deltat = dt1
-      ffovls[1].tstart = (tstart + ddt0).strftime("%M:%S")
+      ffovls[1].tstart = datetime2string(tstart + ddt0)
     return ffovls
 
 
@@ -846,7 +852,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd1.fadet = bfadet
     ffcmd1.frate = frate
     ffcmd1.volume = volume
-    ffcmd1.tstart = t0.strftime('%M:%S')
+    ffcmd1.tstart = datetime2string(t0)
     ffcmd1.tdelta = ':'.join(str(bfdt).split(':')[1:])
     ffcmd1.deltat = bfdt.total_seconds()/frate
     ffcmd1.fadeup = bfadet > 0
@@ -866,7 +872,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
   index += 1
   ffcmd2.frate = frate
   ffcmd2.volume = volume
-  ffcmd2.tstart = (t0 + bfdt).strftime('%M:%S')
+  ffcmd2.tstart = datetime2string(t0 + bfdt)
   ffcmd2.itexts = itexts
   dt2 = dt - bfdt - efdt
   if dt2.total_seconds() < 0:
@@ -888,7 +894,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd3.fadet = fadedown
     ffcmd3.frate = frate
     ffcmd3.volume = volume
-    ffcmd3.tstart = (t1 - efdt).strftime('%M:%S')
+    ffcmd3.tstart = datetime2string(t1 - efdt)
     ffcmd3.tdelta = ':'.join(str(efdt).split(':')[1:])
     ffcmd3.deltat = efdt.total_seconds()/frate
     ffcmd3.tvideo = tvideo
@@ -991,7 +997,7 @@ def create_ffoverlay(p, index):
   ffovl.frate = frate
   ffovl.volume = 0.0
   if tstart:
-    ffovl.tstart = tstart.strftime('%M:%S')
+    ffovl.tstart = datetime2string(tstart)
   ffovl.tvideo = tvideo
   ffovl.cropw = cropw
   ffovl.croph = croph
@@ -1324,6 +1330,7 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
     if ffcmd_file:
       indexFile += 1
       ffmpeg_files += ffcmd_file
+#    print(ffcmd)
 #  print("ffovls")
   overlay_deltat = 0.0
   for i, ffovl in enumerate(ffovls_list):
