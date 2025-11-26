@@ -68,6 +68,7 @@ parser.add_argument('-c', help='Cut all videos', action="store_true", dest='cutV
 parser.add_argument('-clean', help='Clean temporary video fragments in working folder', action="store_true", dest='cleanTemp')
 parser.add_argument('-cpy', help='Copy source files from given folder according to project configuration', default="", type=str, dest='copyFolder')
 parser.add_argument('-tl', help='Print time lines', action="store_true", dest='timeLines')
+parser.add_argument('-so', help='Rebuild sound only', action="store_true", dest='soundOnly')
 
 
 args = parser.parse_args(sys.argv[1:])
@@ -129,6 +130,9 @@ def datetime2string(t):
 
 def cleanTemporaryFolder():
   for file in filter(lambda x: os.path.splitext(x)[1] == videoExt or os.path.splitext(x)[1] == ".txt", os.listdir(temporaryFolder)):
+    if args.soundOnly and file == "video_temp" + videoExt:
+      print("skip", file)
+      continue
     print('delete', os.path.join(temporaryFolder, file))
     os.remove(os.path.join(temporaryFolder, file))
 
@@ -255,7 +259,7 @@ class FFSound:
         if key == "sample_rate":
           self.asample_rate = int(value)
         if key == "duration":
-          self.duration = math.floor(float(value))
+          self.duration = float(value)
 
   def calculate_deltat(self, ffcmds_list):
     self.deltat = 0.0
@@ -606,6 +610,8 @@ class FFCmd(FFBase):
     if self.tvideo:
       return ['-i', self.fname]
     elif not self.tcolor:
+      if self.deltat <= 0: 
+        raise ValueError(f"deltat in line {self.iline} is incorrect {self.deltat}")
       return ['-loop', '1', '-framerate', f"{self.framerate}", '-t', f"{self.deltat}", "-i", self.ifname]
     else:
       return None
@@ -868,26 +874,27 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd1.color = color
     ffcmd1.base = base
     ffcmds.append(ffcmd1)
-  ffcmd2 = FFCmd(iline, index, ifname, tvideo)
-  index += 1
-  ffcmd2.frate = frate
-  ffcmd2.volume = volume
-  ffcmd2.tstart = datetime2string(t0 + bfdt)
-  ffcmd2.itexts = itexts
   dt2 = dt - bfdt - efdt
   if dt2.total_seconds() < 0:
     raise ValueError(f"fragment duration {dt2.total_seconds()} is incorrect for {fname} at {iline}")
-  ffcmd2.tdelta =  ':'.join(str(dt2).split(':')[1:])
-  ffcmd2.deltat = dt2.total_seconds()/frate
-  ffcmd2.tvideo = tvideo
-  ffcmd2.cropw = cropw
-  ffcmd2.croph = croph
-  ffcmd2.cropx = cropx
-  ffcmd2.cropy = cropy
-  ffcmd2.crop = crop
-  ffcmd2.tcolor = tcolor
-  ffcmd2.color = color
-  ffcmds.append(ffcmd2)
+  if dt2.total_seconds() > 0:
+    ffcmd2 = FFCmd(iline, index, ifname, tvideo)
+    index += 1
+    ffcmd2.frate = frate
+    ffcmd2.volume = volume
+    ffcmd2.tstart = datetime2string(t0 + bfdt)
+    ffcmd2.itexts = itexts
+    ffcmd2.tdelta =  ':'.join(str(dt2).split(':')[1:])
+    ffcmd2.deltat = dt2.total_seconds()/frate
+    ffcmd2.tvideo = tvideo
+    ffcmd2.cropw = cropw
+    ffcmd2.croph = croph
+    ffcmd2.cropx = cropx
+    ffcmd2.cropy = cropy
+    ffcmd2.crop = crop
+    ffcmd2.tcolor = tcolor
+    ffcmd2.color = color
+    ffcmds.append(ffcmd2)
   if fadet > 0:
     ffcmd3 = FFCmd(iline, index, ifname, tvideo)
     index += 1
@@ -1206,6 +1213,7 @@ def generate_ffcmds_list():
   for i, ffsnd in enumerate(ffsnds_list):
     ffsnd.index = i
     ffsnd.calculate_deltat(ffcmds_list)
+#    print(ffsnd)
   i = 0
   while i < len(ffsnds_list):
     ffsnd = ffsnds_list[i]
@@ -1375,7 +1383,8 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
   ffmpeg_cmds += ['-map', f"[{voutname}]", '-map', f"[{aoutname}]", "-c:a", "aac", "-r", f"{framerate}", "-video_track_timescale", f"{videoTimebase}", ofile ]
 
 #                  "-c:v", "libx265", "-an", "-x265-params", "crf=25", ofile]
-  subprocess.run(ffmpeg_cmds, cwd=projectFolder)
+  if not args.soundOnly:
+    subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
 #  print(ffcmd_str)
 #  print(f"total_deltat={total_deltat} sound_deltat={sound_deltat} overlay_deltat={overlay_deltat}")
@@ -1389,6 +1398,7 @@ def merge_all_videos(ofile):
   asample_rate = audioSampleRate
   for ffcmd in ffcmds_list:
     ffcmd.verify()
+    print(ffcmd)
   for ffovl in ffovls_list:
     ffovl.verify()
   for ffcmd in ffcmds_list:
@@ -1413,7 +1423,8 @@ def merge_all_videos(ofile):
   if len(ffsnds_list) > 0:
     ovfile = os.path.join(temporaryFolder, "video_temp" + videoExt)
   ffmpeg_cmds = [ffmpeg_name, "-f", "concat", "-safe", "0", "-i", listFile, "-c:v", "copy", "-c:a", "aac", ovfile]
-  subprocess.run(ffmpeg_cmds, cwd=projectFolder)
+  if not args.soundOnly:
+    subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   print(" ".join(ffmpeg_cmds))
   if len(ffsnds_list) > 0:
     osfile = os.path.join(temporaryFolder, "sound_temp" + videoExt)
