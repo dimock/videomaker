@@ -17,6 +17,7 @@ ffprobe_name = "ffprobe"
 colorKey = "white"
 fragment_size = 10
 videoTimebase = 90000
+snapshotsExt = ['.jpg', '.png', '.jpeg']
 
 with open( os.path.splitext(os.path.basename(__file__))[0] + ".cfg", "rt") as f:
   for line in f.readlines():
@@ -55,6 +56,7 @@ with open( os.path.splitext(os.path.basename(__file__))[0] + ".cfg", "rt") as f:
 parser = argparse.ArgumentParser("Simple video maker based on ffmpeg")
 parser.add_argument('-s', help='Source moves folder', default="src", type=str, dest='sourceFolder')
 parser.add_argument('-im', help='Images folder', default="images", type=str, dest='imagesFolder')
+parser.add_argument('-ss', help='Snapshots folder', default="snapshots", type=str, dest='snapshotsFolder')
 parser.add_argument('-sn', help='Sounds folder', default="sounds", type=str, dest='soundsFolder')
 parser.add_argument('-w', help='Working folder', default="work", type=str, dest='workingFolder')
 parser.add_argument('-tmp', help='Temporary folder', default="temp", type=str, dest='temporaryFolder')
@@ -75,6 +77,7 @@ args = parser.parse_args(sys.argv[1:])
 
 projectFolder = os.path.join(args.projectsFolder, args.projectName)
 imagesFolder = os.path.join(projectFolder, args.imagesFolder)
+snapshotsFolder = os.path.join(projectFolder, args.snapshotsFolder)
 soundsFolder = os.path.join(projectFolder, args.soundsFolder)
 sourceFolder = os.path.join(projectFolder, args.sourceFolder)
 workingFolder = os.path.join(projectFolder, args.workingFolder)
@@ -96,8 +99,10 @@ def make_project():
     os.makedirs(outputFolder)
   if not os.path.exists(imagesFolder):
     os.makedirs(imagesFolder)
+  if not os.path.exists(snapshotsFolder):
+    os.makedirs(snapshotsFolder)
   if not os.path.exists(soundsFolder):
-    os.makedirs(soundsFolder) 
+    os.makedirs(soundsFolder)
   if not os.path.exists(configFileName):
     with open(configFileName, "wt") as f:
       f.write("# Write your project config here\n")
@@ -484,6 +489,7 @@ class FFBase:
 class FFCmd(FFBase):
   icmd = -1
   fname = ''
+  snapshot_name = ''
   tdelta = ''
   deltat = 0.0
   volume = 1.0
@@ -498,9 +504,11 @@ class FFCmd(FFBase):
   itexts = []
   texts = []
   tcolor = False
+  tsnap = False
   color = ""
   iline = -1
   base = False
+  createSnapshot = False
 
   def __init__(self, iline, index, ifname, tvideo):
     super().__init__(index, ifname, tvideo)
@@ -536,9 +544,13 @@ class FFCmd(FFBase):
     return f"{self.index}: " + " ".join(s)
 
   def cut_video_part(self):
-    if not self.tvideo:
+    cmdarr = None
+    if self.tsnap and self.createSnapshot:
+      cmdarr = [ffmpeg_name, '-ss', self.tstart, '-i', self.ifname, '-frames:v', '1', '-q:v', '2', self.snapshot_name]
+    elif self.tvideo:
+      cmdarr = [ffmpeg_name, '-ss', self.tstart,  '-i', self.ifname, '-c', 'copy', '-t', self.tdelta, self.fname]
+    if not cmdarr:
       return
-    cmdarr = [ffmpeg_name, '-ss', self.tstart,  '-i', self.ifname, '-c', 'copy', '-t', self.tdelta, self.fname]
     subprocess.run(cmdarr, cwd=projectFolder)
 
   def verify(self):
@@ -612,7 +624,10 @@ class FFCmd(FFBase):
     elif not self.tcolor:
       if self.deltat <= 0: 
         raise ValueError(f"deltat in line {self.iline} is incorrect {self.deltat}")
-      return ['-loop', '1', '-framerate', f"{self.framerate}", '-t', f"{self.deltat}", "-i", self.ifname]
+      ifname = self.ifname
+      if self.tsnap:
+        ifname = self.snapshot_name
+      return ['-loop', '1', '-framerate', f"{self.framerate}", '-t', f"{self.deltat}", "-i", ifname]
     else:
       return None
 
@@ -779,6 +794,8 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
   st1 = "00:00"
   deltat = 0.0
   tvideo = True
+  tsnap = False
+  snapshot_name = ''
   itexts = []
   cropw, croph, cropx, cropy = 0.0, 0.0, 0.0, 0.0
   crop = False
@@ -800,6 +817,12 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
       st0 = value
     if key == 'te':
       st1 = value
+    if key == 'ss':
+      st0 = value
+      tsnap = True
+      tvideo = False
+      tcolor = False
+      snapshot_name = os.path.join(snapshotsFolder, f"snapshot_{index}.jpg")
     if key == 'r':
       frate = float(value)
     if key == 'v':
@@ -833,7 +856,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     raise ValueError(f"{ifile} at {iline} incorrect crop values {cropx} {cropy} {cropw} {croph}")
   if not tvideo:
     frate = 1.0
-    if not tcolor:
+    if not tcolor and not tsnap:
       ifname = os.path.join(imagesFolder, fname)
   t0 = read_datetime(st0)
   t1 = read_datetime(st1)
@@ -852,6 +875,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
   bfdt = timedelta(seconds=bfadet*frate)
   efdt = timedelta(seconds=fadet*frate)
   first = index == 0
+  createSnapshot = tsnap
   if bfadet > 0:
     ffcmd1 = FFCmd(iline, index, ifname, tvideo)
     index += 1
@@ -873,6 +897,10 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd1.tcolor = tcolor
     ffcmd1.color = color
     ffcmd1.base = base
+    ffcmd1.tsnap = tsnap
+    ffcmd1.createSnapshot = createSnapshot
+    ffcmd1.snapshot_name = snapshot_name
+    createSnapshot = False
     ffcmds.append(ffcmd1)
   dt2 = dt - bfdt - efdt
   if dt2.total_seconds() < 0:
@@ -894,6 +922,10 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd2.crop = crop
     ffcmd2.tcolor = tcolor
     ffcmd2.color = color
+    ffcmd2.tsnap = tsnap
+    ffcmd2.createSnapshot = createSnapshot
+    createSnapshot = False
+    ffcmd2.snapshot_name = snapshot_name
     ffcmds.append(ffcmd2)
   if fadet > 0:
     ffcmd3 = FFCmd(iline, index, ifname, tvideo)
@@ -913,6 +945,9 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd3.crop = crop
     ffcmd3.tcolor = tcolor
     ffcmd3.color = color
+    ffcmd3.tsnap = tsnap
+    ffcmd3.createSnapshot = createSnapshot
+    ffcmd3.snapshot_name = snapshot_name
     ffcmds.append(ffcmd3)
   return index, ffcmds, fadet
 
@@ -1422,14 +1457,14 @@ def merge_all_videos(ofile):
   ovfile = ofile
   if len(ffsnds_list) > 0:
     ovfile = os.path.join(temporaryFolder, "video_temp" + videoExt)
-  ffmpeg_cmds = [ffmpeg_name, "-f", "concat", "-safe", "0", "-i", listFile, "-c:v", "copy", "-c:a", "aac", ovfile]
+  ffmpeg_cmds = [ffmpeg_name, "-f", "concat", "-safe", "0", "-i", listFile, "-c:v", "copy", "-c:a", "aac", "-movflags", "faststart", ovfile]
   if not args.soundOnly:
     subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   print(" ".join(ffmpeg_cmds))
   if len(ffsnds_list) > 0:
     osfile = os.path.join(temporaryFolder, "sound_temp" + videoExt)
     make_sound(ffsnds_list, osfile)
-    ffmpeg_cmds = [ffmpeg_name, "-i", ovfile, "-i", osfile, "-filter_complex", "[0:v]copy[vout];[0:a][1:a]amix=2:shortest[aout]", "-map", "[vout]", "-map", "[aout]", "-c:a", "aac", "-r", f"{framerate}", "-video_track_timescale", f"{videoTimebase}", ofile]
+    ffmpeg_cmds = [ffmpeg_name, "-i", ovfile, "-i", osfile, "-filter_complex", "[0:v]copy[vout];[0:a][1:a]amix=2:shortest[aout]", "-map", "[vout]", "-map", "[aout]", "-c:a", "aac", "-r", f"{framerate}", "-video_track_timescale", f"{videoTimebase}", "-movflags", "faststart", ofile]
     subprocess.run(ffmpeg_cmds, cwd=projectFolder)
     print(" ".join(ffmpeg_cmds))
   print("total fragments =", ffcmds_num, "framerate", framerate)
@@ -1486,6 +1521,10 @@ def cleanWorkingFolder():
   for file in filter(lambda x: os.path.splitext(x)[1] == videoExt, os.listdir(workingFolder)):
     print('delete', os.path.join(workingFolder, file))
     os.remove(os.path.join(workingFolder, file))
+  for file in filter(lambda x: os.path.splitext(x)[1] in snapshotsExt, os.listdir(snapshotsFolder)):
+    print('delete', os.path.join(snapshotsFolder, file))
+    os.remove(os.path.join(snapshotsFolder, file))
+
 
 def printTimelines():
   ffcmds_list,_ ,_ = generate_ffcmds_list()
