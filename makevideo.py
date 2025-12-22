@@ -546,12 +546,13 @@ class FFCmd(FFBase):
   def cut_video_part(self):
     cmdarr = None
     if self.tsnap and self.createSnapshot:
-      cmdarr = [ffmpeg_name, '-ss', self.tstart, '-i', self.ifname, '-frames:v', '1', '-q:v', '2', self.snapshot_name]
+      cmdarr = [ffmpeg_name, '-ss', self.tstart, '-i', self.ifname, '-frames:v', '1', '-q:v', '2', '-update', 'true', self.snapshot_name]
     elif self.tvideo:
       cmdarr = [ffmpeg_name, '-ss', self.tstart,  '-i', self.ifname, '-c', 'copy', '-t', self.tdelta, self.fname]
-    if not cmdarr:
-      return
-    subprocess.run(cmdarr, cwd=projectFolder)
+    if cmdarr:
+      subprocess.run(cmdarr, cwd=projectFolder)
+
+
 
   def verify(self):
     if self.tvideo:
@@ -1363,7 +1364,7 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
   ffovls_vnames = []
   total_deltat = 0.0
   indexFile = 0
-#  print("ffcmds")
+#  print(f"ffcmds part {ofile}")
   for i, ffcmd in enumerate(ffcmds_list):
     ffcmd.index = i
     ffcmd.update_index(indexFile)
@@ -1416,15 +1417,13 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
   filters_str = ';'.join(ffmpeg_filters)
   ffmpeg_cmds += ['-filter_complex', filters_str]
   ffmpeg_cmds += ['-map', f"[{voutname}]", '-map', f"[{aoutname}]", "-c:a", "aac", "-r", f"{framerate}", "-video_track_timescale", f"{videoTimebase}", ofile ]
-
-#                  "-c:v", "libx265", "-an", "-x265-params", "crf=25", ofile]
   if not args.soundOnly:
     subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
-#  print(ffcmd_str)
-#  print(f"total_deltat={total_deltat} sound_deltat={sound_deltat} overlay_deltat={overlay_deltat}")
-#  with open("proj.sh", "wt") as f:
-#    f.write(ffcmd_str)
+#  print(f"{ofile} complex filter")
+#  print(f"{filters_str}")
+#  print(f"{ofile} total_deltat={total_deltat} overlay_deltat={overlay_deltat}")
+  return total_deltat
  
 def merge_all_videos(ofile):
   cleanTemporaryFolder()
@@ -1433,7 +1432,7 @@ def merge_all_videos(ofile):
   asample_rate = audioSampleRate
   for ffcmd in ffcmds_list:
     ffcmd.verify()
-    print(ffcmd)
+#    print(ffcmd)
   for ffovl in ffovls_list:
     ffovl.verify()
   for ffcmd in ffcmds_list:
@@ -1448,7 +1447,8 @@ def merge_all_videos(ofile):
   for i, frag in enumerate(fragments):
     ffile = os.path.join(temporaryFolder, "temp_" + str(i) + videoExt)
     filenames += [ffile]
-    merge_part(frag[0], frag[1], framerate, ffile)
+    part_dt = merge_part(frag[0], frag[1], framerate, ffile)
+    total_deltat += part_dt
     ffcmds_num += len(frag[0])
   listFile = os.path.join(temporaryFolder, "files.txt")
   with open(listFile, "wt") as f:
@@ -1468,14 +1468,13 @@ def merge_all_videos(ofile):
     subprocess.run(ffmpeg_cmds, cwd=projectFolder)
     print(" ".join(ffmpeg_cmds))
   print("total fragments =", ffcmds_num, "framerate", framerate)
+  print(f"Video length = {timedelta(seconds=total_deltat)}")
 
 def youtube_encode(ifile, ofile):
   ffmpeg_cmds = [ffmpeg_name, "-i", ifile, "-vf", "format=yuv420p", "-force_key_frames", "'expr:gte(t,n_forced/2)'", "-c:v", "libx264", "-crf", "18", "-bf", "2", "-c:a", "aac", "-q:a", "1", "-ac", "2", "-ar", "48000", "-use_editlist", "0", "-movflags", "+faststart", ofile]
   subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   print(" ".join(ffmpeg_cmds))
 
-
-#ffmpeg -i in.mp4 -vf yadif,format=yuv420p -force_key_frames "expr:gte(t,n_forced/2)" -c:v libx264 -crf 18 -bf 2 -c:a aac -q:a 1 -ac 2 -ar 48000 -use_editlist 0 -movflags +faststart out.mp4
 
 def copySourceFiles(copyFolder):
   image_names = {}
@@ -1489,7 +1488,7 @@ def copySourceFiles(copyFolder):
   for ffcmd in ffcmds_list:
     if len(ffcmd.ifname) == 0 or ffcmd.tcolor:
       continue
-    if ffcmd.tvideo:
+    if ffcmd.tvideo or ffcmd.tsnap:
       video_names[os.path.basename(ffcmd.ifname)] = ffcmd.ifname
     else:
       image_names[os.path.basename(ffcmd.ifname)] = ffcmd.ifname
@@ -1566,6 +1565,6 @@ if __name__ == "__main__":
       merge_all_videos( os.path.join(outputFolder, args.outputFile) )
     if args.timeLines:
       printTimelines()
-    print(str(datetime.now()-ts))
+    print(f"Calculation time: {datetime.now()-ts}")
   except Exception as e:
     print("error: ", e)
