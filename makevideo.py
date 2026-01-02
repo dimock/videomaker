@@ -63,7 +63,7 @@ parser.add_argument('-tmp', help='Temporary folder', default="temp", type=str, d
 parser.add_argument('-pf', help='Projects folder', default=defaultProjectsFolder, type=str, dest='projectsFolder')
 parser.add_argument('-pn', help='Project name', default='proj1', type=str, dest='projectName')
 parser.add_argument('-o', help='Output moves folder', default="output", type=str, dest='outputFolder')
-parser.add_argument('-of', help='Output file', default="ofile.mp4", type=str, dest='outputFile')
+parser.add_argument('-of', help='Output file', default="", type=str, dest='outputFile')
 parser.add_argument('-mk', help='Make project with subfolders', action="store_true", dest='makeProject')
 parser.add_argument('-mg', help='Merge all video parts', action="store_true", dest='mergeVideos')
 parser.add_argument('-c', help='Cut all videos', action="store_true", dest='cutVideos')
@@ -85,6 +85,10 @@ temporaryFolder = os.path.join(projectFolder, args.temporaryFolder)
 outputFolder = os.path.join(projectFolder, args.outputFolder)
 configFileName = os.path.join(projectFolder, args.projectName+'.cfg')
 textsFileName = os.path.join(projectFolder, args.projectName+'.txt')
+outputFileName = args.outputFile
+
+if len(outputFileName) == 0:
+  outputFileName = args.projectName + videoExt
 
 def make_project():
   if not os.path.exists(projectFolder):
@@ -158,6 +162,10 @@ class FFText:
   alignv1 = 'c'
   alignh1 = 'c'
   fadet = 0.0
+  scolor = None
+  shadowx = 0
+  shadowy = 0
+
 
   def __init__(self, txt):
     self.text = txt
@@ -172,6 +180,10 @@ class FFText:
     ft = self.fadet
     filter_strs = [f"drawtext=text='{self.text}'"]
     filter_strs += [f"fontcolor={self.color}"]
+    if not(self.scolor is None):
+      filter_strs += [f"shadowcolor={self.scolor}"]
+      filter_strs += [f"shadowx={self.shadowx}"]
+      filter_strs += [f"shadowy={self.shadowy}"]
     if self.size1 == self.size0:
       filter_strs += [f"fontsize={self.size0}"]
     else:
@@ -1111,6 +1123,12 @@ def load_texts():
         ftxt.alignv1 = value
       if key == 'ah1':
         ftxt.alignh1 = value
+      if key == 'scolor':
+        ftxt.scolor = value
+      if key == 'shx':
+        ftxt.shadowx = int(value)
+      if key == 'shy':
+        ftxt.shadowy = int(value)
     texts.append(ftxt)
   return texts
 
@@ -1562,7 +1580,7 @@ if __name__ == "__main__":
     if args.cutVideos:
       cut_all_videos()
     if args.mergeVideos:
-      merge_all_videos( os.path.join(outputFolder, args.outputFile) )
+      merge_all_videos( os.path.join(outputFolder, outputFileName) )
     if args.timeLines:
       printTimelines()
     print(f"Calculation time: {datetime.now()-ts}")
