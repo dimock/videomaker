@@ -19,6 +19,8 @@ fragment_size = 10
 videoTimebase = 90000
 snapshotsExt = ['.jpg', '.png', '.jpeg']
 
+debug_no_ffmpeg_exec = False
+
 with open( os.path.splitext(os.path.basename(__file__))[0] + ".cfg", "rt") as f:
   for line in f.readlines():
     p = line.split()
@@ -282,7 +284,7 @@ class FFSound:
     self.deltat = 0.0
     for i in range(self.istart, self.iend):
       if ffcmds_list[i].create_out:
-       self.deltat += ffcmds_list[i].deltat
+       self.deltat += ffcmds_list[i].part_deltat()
     self.tend += self.deltat
  
   def update_index(self, isound):
@@ -521,6 +523,7 @@ class FFCmd(FFBase):
   iline = -1
   base = False
   createSnapshot = False
+  part_duration = 0.0
 
   def __init__(self, iline, index, ifname, tvideo):
     super().__init__(index, ifname, tvideo)
@@ -530,6 +533,38 @@ class FFCmd(FFBase):
       p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', self.ifname], encoding='utf-8',stdout=subprocess.PIPE)
       streams_info = p.stdout.lstrip().rstrip().split('\n')
       self.parseVideoInfo(streams_info)
+    self.parseVideoPart()
+
+  def parseVideoPart(self):
+    if os.path.exists(self.fname) and self.tvideo:
+      p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', self.fname], encoding='utf-8',stdout=subprocess.PIPE)
+      streams_info = p.stdout.lstrip().rstrip().split('\n')
+      streams = []
+      for sval in streams_info:
+        if sval == "[STREAM]":
+          streams.append([])
+          continue
+        if len(streams) > 0:
+          streams[-1].append(sval.split("="))
+      for strm in streams:
+        if len(list(filter(lambda x: len(x) > 1 and x[0].lstrip().rstrip() =="codec_type" and x[1].lstrip().rstrip() == "video", strm))) > 0:
+          for vals in strm:
+            if len(vals) < 2:
+              continue
+            key, value = vals[0].lstrip().rstrip(), vals[1].lstrip().rstrip()
+            try:
+              if key == "duration" and self.part_duration == 0:
+                self.part_duration = float(value)
+                print(f"part_duration={self.part_duration}")
+                break
+            except ValueError:
+              pass
+
+  def part_deltat(self):
+    if self.part_duration > 0 and self.frate > 0:
+      return self.part_duration / self.frate
+    else:
+      return self.deltat
  
   def __repr__(self):
     s = []
@@ -1205,7 +1240,7 @@ def generate_ffcmds_list():
     ffcmd.asample_rate = asample_rate
     ffcmd.framerate = framerate
     if ffcmd.create_out:
-      total_deltat += ffcmd.deltat
+      total_deltat += ffcmd.part_deltat()
   for ffovl in ffovls_list:
     if ffovl.ioverlay_start < len(ffcmds_list) and ffcmds_list[ffovl.ioverlay_start].fadet > 0:
       ffovl.ioverlay_start += 1
@@ -1368,7 +1403,8 @@ def make_sound(ffsnds_list, osfile):
   filters_str = ';'.join(ffmpeg_filters)
   ffmpeg_cmds += ['-filter_complex', filters_str]
   ffmpeg_cmds += ['-map', f"[{asndname}]", "-c:a", "aac",  osfile ]
-  subprocess.run(ffmpeg_cmds, cwd=projectFolder)
+  if not debug_no_ffmpeg_exec:
+    subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
   print(ffcmd_str)
 
@@ -1435,7 +1471,7 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
   filters_str = ';'.join(ffmpeg_filters)
   ffmpeg_cmds += ['-filter_complex', filters_str]
   ffmpeg_cmds += ['-map', f"[{voutname}]", '-map', f"[{aoutname}]", "-c:a", "aac", "-r", f"{framerate}", "-video_track_timescale", f"{videoTimebase}", ofile ]
-  if not args.soundOnly:
+  if not args.soundOnly and not debug_no_ffmpeg_exec:
     subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   ffcmd_str =  " ".join(ffmpeg_cmds)
 #  print(f"{ofile} complex filter")
@@ -1458,7 +1494,7 @@ def merge_all_videos(ofile):
       asample_rate = ffcmd.asample_rate
       framerate = ffcmd.framerate
       break 
-  fragments = split_fragments(ffcmds_list, ffovls_list)
+  fragments = split_fragments(ffcmds_list[:], ffovls_list)
   filenames = []
   ffcmds_num = 0
   total_deltat = 0.0
@@ -1476,17 +1512,27 @@ def merge_all_videos(ofile):
   if len(ffsnds_list) > 0:
     ovfile = os.path.join(temporaryFolder, "video_temp" + videoExt)
   ffmpeg_cmds = [ffmpeg_name, "-f", "concat", "-safe", "0", "-i", listFile, "-c:v", "copy", "-c:a", "aac", "-movflags", "faststart", ovfile]
-  if not args.soundOnly:
+  if not args.soundOnly and not debug_no_ffmpeg_exec:
     subprocess.run(ffmpeg_cmds, cwd=projectFolder)
   print(" ".join(ffmpeg_cmds))
   if len(ffsnds_list) > 0:
     osfile = os.path.join(temporaryFolder, "sound_temp" + videoExt)
     make_sound(ffsnds_list, osfile)
     ffmpeg_cmds = [ffmpeg_name, "-i", ovfile, "-i", osfile, "-filter_complex", "[0:v]copy[vout];[0:a][1:a]amix=2:shortest[aout]", "-map", "[vout]", "-map", "[aout]", "-c:a", "aac", "-r", f"{framerate}", "-video_track_timescale", f"{videoTimebase}", "-movflags", "faststart", ofile]
-    subprocess.run(ffmpeg_cmds, cwd=projectFolder)
+    if not debug_no_ffmpeg_exec:
+      subprocess.run(ffmpeg_cmds, cwd=projectFolder)
     print(" ".join(ffmpeg_cmds))
   print("total fragments =", ffcmds_num, "framerate", framerate)
   print(f"Video length = {timedelta(seconds=total_deltat)}")
+
+  total_deltat = 0.0
+  sound_deltat = 0.0
+  for ffcmd in ffcmds_list:
+    if ffcmd.create_out:
+      total_deltat += ffcmd.part_deltat()
+  for ffsnd in ffsnds_list:
+    sound_deltat += ffsnd.deltat
+  print(f"total video time = {total_deltat}, sound time = {sound_deltat}")
 
 def youtube_encode(ifile, ofile):
   ffmpeg_cmds = [ffmpeg_name, "-i", ifile, "-vf", "format=yuv420p", "-force_key_frames", "'expr:gte(t,n_forced/2)'", "-c:v", "libx264", "-crf", "18", "-bf", "2", "-c:a", "aac", "-q:a", "1", "-ac", "2", "-ar", "48000", "-use_editlist", "0", "-movflags", "+faststart", ofile]
