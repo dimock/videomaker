@@ -1167,6 +1167,20 @@ def load_texts():
     texts.append(ftxt)
   return texts
 
+def read_define(defines, line):
+  p = line.lstrip().rstrip().split()
+  if len(p) < 3 or p[0] != "define":
+    return defines
+  var = p[1]
+  val = p[2]
+  defines[var] = val
+  return defines
+
+def apply_defines(defines, line):
+  for var, val in defines.items():
+    line = re.sub("{"+var+"}", val, line)
+  return line
+
 def generate_ffcmds_list():
   texts = load_texts()
   index = 0
@@ -1177,14 +1191,20 @@ def generate_ffcmds_list():
   ffcmds_list = []
   ffsnds_list = []
   ffovls_list = []
+  defines = {}
   with open(configFileName, 'rt') as f:
     parsed = []
     lines = f.readlines()
     for line in lines:
       l = line.lstrip().rstrip()
       p = []
-      if len(l) >  0 and l[0] != '#':
-        p = l.split()
+      if len(l) == 0:
+        continue
+      if l[0] == '#':
+        defines = read_define(defines, l[1:])
+        continue
+      l = apply_defines(defines, l)
+      p = l.split()
       parsed.append(p)
     for i, p in enumerate(parsed):
       if len(p) == 0:
@@ -1530,8 +1550,11 @@ def merge_all_videos(ofile):
   for ffcmd in ffcmds_list:
     if ffcmd.create_out:
       total_deltat += ffcmd.part_deltat()
+#    if ffcmd.tvideo:
+#      print("cmd volume=", ffcmd.volume)
   for ffsnd in ffsnds_list:
     sound_deltat += ffsnd.deltat
+#    print("sound volume=", ffsnd.svolume)
   print(f"total video time = {total_deltat}, sound time = {sound_deltat}")
 
 def youtube_encode(ifile, ofile):
