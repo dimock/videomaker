@@ -73,6 +73,7 @@ parser.add_argument('-clean', help='Clean temporary video fragments in working f
 parser.add_argument('-cpy', help='Copy source files from given folder according to project configuration', default="", type=str, dest='copyFolder')
 parser.add_argument('-tl', help='Print time lines', action="store_true", dest='timeLines')
 parser.add_argument('-so', help='Rebuild sound only', action="store_true", dest='soundOnly')
+parser.add_argument('-rm', help='Remove old output file if exists', action="store_true", dest='removeOld')
 
 
 args = parser.parse_args(sys.argv[1:])
@@ -535,9 +536,8 @@ class FFCmd(FFBase):
       self.parseVideoInfo(streams_info)
     self.parseVideoPart()
 
-  def parseVideoPart(self):
-    if os.path.exists(self.fname) and self.tvideo:
-      p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', self.fname], encoding='utf-8',stdout=subprocess.PIPE)
+  def extractDuration(self, filename):
+      p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', filename], encoding='utf-8',stdout=subprocess.PIPE)
       streams_info = p.stdout.lstrip().rstrip().split('\n')
       streams = []
       for sval in streams_info:
@@ -559,6 +559,49 @@ class FFCmd(FFBase):
                 break
             except ValueError:
               pass
+ 
+  def parseVideoPart(self):
+    if os.path.exists(self.fname) and self.tvideo:
+      self.extractDuration(self.fname)
+
+
+  def calculateDuration(self):
+    if not self.create_out:
+      print("fragment {self.index} does not produce output")
+      return
+    cofile = os.path.join(temporaryFolder, "color_fragment" +  videoExt)
+    tsfile = os.path.join(temporaryFolder, "snapshot_fragment.jpg")
+    ffmpeg_cmds = [ffmpeg_name]
+    if self.tcolor:
+      video_filters = f"color={self.color}:s={self.width}x{self.height}:d={self.deltat},fps={self.framerate},setsar=1[v1]"
+      audio_filters = f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}[a1]"
+    elif not self.tvideo:
+      if self.tsnap:
+        if not self.createSnapshot:
+          return
+        ifname = tsfile
+        cmdarr = [ffmpeg_name, '-ss', self.tstart, '-i', self.ifname, '-frames:v', '1', '-q:v', '2', '-update', 'true', tsfile]
+        subprocess.run(cmdarr, cwd=projectFolder)
+        print(f"create snapshot: f{' '.join(cmdarr)}")
+      else: # iamge
+        ifname = self.ifname
+      ffmpeg_cmds += ['-loop', '1', '-framerate', f"{self.framerate}", '-t', f"{self.deltat}", "-i", ifname]
+      video_filters = f"[0:v]fps={self.framerate},setsar=1[v1]"
+      audio_filters = f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}[a1]"
+    filters_str = video_filters + ';' + audio_filters
+    ffmpeg_cmds += ['-filter_complex', filters_str]
+    ffmpeg_cmds += ['-map', "[v1]", '-map', "[a1]", "-c:a", "aac", "-r", f"{frameRate}", "-video_track_timescale", f"{videoTimebase}", cofile ]
+    subprocess.run(ffmpeg_cmds, cwd=projectFolder)
+    ffcmd_str =  " ".join(ffmpeg_cmds)
+    print("create temp. mp4 file: " + ffcmd_str)
+    self.extractDuration(cofile)
+    if os.path.exists(cofile):
+      os.remove(cofile)
+    if os.path.exists(tsfile):
+      os.remove(tsfile)
+    print(f"part {self.index} duration = {self.part_duration}")
+
+
 
   def part_deltat(self):
     if self.part_duration > 0 and self.frate > 0:
@@ -739,7 +782,7 @@ class FFOverlay(FFBase):
     self.deltat = 0.0
     for i in range(self.ioverlay_start, self.ioverlay_end):
       if ffcmds_list[i].create_out:
-        self.deltat += ffcmds_list[i].deltat
+        self.deltat += ffcmds_list[i].part_deltat()
 
   def verify(self):
     if self.tvideo:
@@ -849,6 +892,7 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
   crop = False
   overlay_prev = False
   base = False
+  ts_found,te_found = False,False
   for i in range(index0, len(p), 2):
     if i+1 > len(p)-1:
       break
@@ -863,8 +907,10 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
       deltat = float(value)
     if key == 'ts':
       st0 = value
+      ts_found = True
     if key == 'te':
       st1 = value
+      te_found = True
     if key == 'ss':
       st0 = value
       tsnap = True
@@ -897,6 +943,8 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
       cropy = float(value)
     if key == 'base':
       base = int(value) != 0
+  if te_found and not ts_found:
+    raise ValueError(f"{iline} start time not found but end time was for {fname}")
   if tcolor:
     crop = False
     tvideo = False
@@ -997,6 +1045,9 @@ def create_ffcmds(p, iline, index, bfadet=0.0):
     ffcmd3.createSnapshot = createSnapshot
     ffcmd3.snapshot_name = snapshot_name
     ffcmds.append(ffcmd3)
+  for ffcmd in ffcmds:
+    if not ffcmd.tvideo and ffcmd.create_out:
+      ffcmd.calculateDuration()
   return index, ffcmds, fadet
 
 def create_ffsound(p, index):
@@ -1199,9 +1250,11 @@ def generate_ffcmds_list():
       l = line.lstrip().rstrip()
       p = []
       if len(l) == 0:
+        parsed.append("")
         continue
       if l[0] == '#':
         defines = read_define(defines, l[1:])
+        parsed.append("")
         continue
       l = apply_defines(defines, l)
       p = l.split()
@@ -1262,8 +1315,14 @@ def generate_ffcmds_list():
     if ffcmd.create_out:
       total_deltat += ffcmd.part_deltat()
   for ffovl in ffovls_list:
-    if ffovl.ioverlay_start < len(ffcmds_list) and ffcmds_list[ffovl.ioverlay_start].fadet > 0:
+    fadet_i = ffcmds_list[ffovl.ioverlay_start].fadet
+    if ffovl.ioverlay_start < len(ffcmds_list) and fadet_i > 0:
       ffovl.ioverlay_start += 1
+      print(f'ffovl.tstart(0)={ffovl.tstart}')
+      tstart = read_datetime(ffovl.tstart) + timedelta(seconds=fadet_i)
+      ffovl.tstart = datetime2string(tstart)
+      print(f'fadet={fadet_i}')
+      print(f'ffovl.tstart = {ffovl.tstart}')
     if ffovl.ioverlay_end > ffovl.ioverlay_start and ffovl.ioverlay_end-1 < len(ffcmds_list) and ffcmds_list[ffovl.ioverlay_end-1].fadet > 0:
       ffovl.ioverlay_end -= 1
   i = 0
@@ -1339,14 +1398,30 @@ def generate_ffcmds_list():
     ffsnd.index = i
     ffsnd.asample_rate = asample_rate
     sound_deltat += ffsnd.deltat
+  ovls_deltat = 0.0
   for i, ffovl in enumerate(ffovls_list):
     ffovl.index = i
     ffovl.width = width
     ffovl.height = height
     ffovl.framerate = framerate
     ffovl.calculate_deltat(ffcmds_list)
+    ovls_deltat += ffovl.deltat
   if len(ffsnds_list) > 0 and math.fabs(total_deltat - sound_deltat) > 0.001:
-    raise RuntimeError(f"Times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat}")
+    raise RuntimeError(f"Total times of streams are different: total_deltat={total_deltat} sound_deltat={sound_deltat}")
+  if len(ffovls_list) > 0 and math.fabs(total_deltat - ovls_deltat) > 0.001:
+    raise RuntimeError(f"Total times of streams are different: total_deltat={total_deltat} overlays_deltat={ovls_deltat}")
+
+  ovls_time = 0.0
+  for ffovl in ffovls_list:
+    if not ffovl.blank:
+      cmds_time = 0.0
+      for i in range(0, ffovl.ioverlay_start):
+        if ffcmds_list[i].create_out:
+          cmds_time += ffcmds_list[i].part_deltat()
+      print(f"overlay cmd index = {ffovl.ioverlay_start}, overlays time = {ovls_time}, cmd time = {cmds_time}")
+    ovls_time += ffovl.deltat
+
+
   return ffcmds_list, ffsnds_list, ffovls_list
 
 def split_fragments(ffcmds_list, ffovls_list):
@@ -1364,15 +1439,18 @@ def split_fragments(ffcmds_list, ffovls_list):
     cmds_duration = 0.0
     for ffcmd in ffcmds_curr:
       if ffcmd.create_out:
-        cmds_duration += ffcmd.deltat
+        cmds_duration += ffcmd.part_deltat()
     ovls_duration = 0.0
     ffovls_curr = []
     for i, ffovl in enumerate(ffovls_list):
       ovls_duration += ffovl.deltat
       if ovls_duration > cmds_duration:
         dt0 = ffovl.deltat - (ovls_duration-cmds_duration)
-        if dt0 < 0:
+        if dt0 < -1e-5:
+          print(f"ffovl.deltat={ffovl.deltat}, ovls_duration={ovls_duration}, cmds_duration={cmds_duration}")
           raise ValueError(f"duration of overlay fragment at {ffovl.index} is incorrect {dt0}")
+        elif dt0 < 0:
+          dt0 = 0
         ffovls = ffovl.split_by_deltat(dt0)
         del ffovls_list[i]
         ffovls_curr = ffovls_list[:i]
@@ -1443,7 +1521,7 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
     ffcmd.index = i
     ffcmd.update_index(indexFile)
     if ffcmd.create_out:
-      total_deltat += ffcmd.deltat
+      total_deltat += ffcmd.part_deltat()
     ffcmd_file = ffcmd.ffmpeg_file()
     if ffcmd_file:
       indexFile += 1
@@ -1637,15 +1715,21 @@ def printTimelines():
     sdt = dt.strftime("%M:%S")
     print(f"{i+1}: {sdt}: {fname} {t[2]}")
 
+def removeOldFile(fname):
+  if os.path.exists(fname):
+    os.remove(fname)
+
 if __name__ == "__main__":
   try:
     ts = datetime.now()
     if args.makeProject:
       make_project()
-    if os.path.exists(args.copyFolder):
-      copySourceFiles(args.copyFolder)
     if args.cleanTemp:
       cleanWorkingFolder()
+    if args.removeOld:
+      removeOldFile(os.path.join(outputFolder, outputFileName))
+    if os.path.exists(args.copyFolder):
+      copySourceFiles(args.copyFolder)
     if args.cutVideos:
       cut_all_videos()
     if args.mergeVideos:
