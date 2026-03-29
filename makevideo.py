@@ -21,7 +21,7 @@ snapshotsExt = ['.jpg', '.png', '.jpeg']
 
 debug_no_ffmpeg_exec = False
 
-with open( os.path.splitext(os.path.basename(__file__))[0] + ".cfg", "rt") as f:
+with open(os.path.splitext(os.path.realpath(__file__))[0] + ".cfg", "rt") as f:
   for line in f.readlines():
     p = line.split()
     for i in range(0, len(p), 2):
@@ -152,7 +152,7 @@ def cleanTemporaryFolder():
 class FFText:
   text = ""
   tstart = 0.0
-  tend = 0.0
+  tend = 100.0
   size0 = 24
   size1 = 24
   color = "white"
@@ -530,11 +530,13 @@ class FFCmd(FFBase):
     super().__init__(index, ifname, tvideo)
     self.iline = iline
     self.fname = os.path.join(workingFolder, partPrefix + "_" + str(self.index) + videoExt)
+    #print(f"FFCmd.ifname = {self.ifname}")
     if os.path.exists(self.ifname):
       p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', self.ifname], encoding='utf-8',stdout=subprocess.PIPE)
       streams_info = p.stdout.lstrip().rstrip().split('\n')
       self.parseVideoInfo(streams_info)
     self.parseVideoPart()
+    #print(f"FFCmd.framerate = {self.framerate}")
 
   def extractDuration(self, filename):
       p = subprocess.run([ffprobe_name, '-v', 'error', '-show_streams', filename], encoding='utf-8',stdout=subprocess.PIPE)
@@ -583,7 +585,7 @@ class FFCmd(FFBase):
         cmdarr = [ffmpeg_name, '-ss', self.tstart, '-i', self.ifname, '-frames:v', '1', '-q:v', '2', '-update', 'true', tsfile]
         subprocess.run(cmdarr, cwd=projectFolder)
         print(f"create snapshot: f{' '.join(cmdarr)}")
-      else: # iamge
+      else: # image
         ifname = self.ifname
       ffmpeg_cmds += ['-loop', '1', '-framerate', f"{self.framerate}", '-t', f"{self.deltat}", "-i", ifname]
       video_filters = f"[0:v]fps={self.framerate},setsar=1[v1]"
