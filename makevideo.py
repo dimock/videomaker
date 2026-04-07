@@ -65,6 +65,7 @@ parser.add_argument('-tmp', help='Temporary folder', default="temp", type=str, d
 parser.add_argument('-pf', help='Projects folder', default=defaultProjectsFolder, type=str, dest='projectsFolder')
 parser.add_argument('-pn', help='Project name', default='proj1', type=str, dest='projectName')
 parser.add_argument('-o', help='Output moves folder', default="output", type=str, dest='outputFolder')
+parser.add_argument('-if', help='Input file', default="", type=str, dest='inputFile')
 parser.add_argument('-of', help='Output file', default="", type=str, dest='outputFile')
 parser.add_argument('-mk', help='Make project with subfolders', action="store_true", dest='makeProject')
 parser.add_argument('-mg', help='Merge all video parts', action="store_true", dest='mergeVideos')
@@ -74,6 +75,7 @@ parser.add_argument('-cpy', help='Copy source files from given folder according 
 parser.add_argument('-tl', help='Print time lines', action="store_true", dest='timeLines')
 parser.add_argument('-so', help='Rebuild sound only', action="store_true", dest='soundOnly')
 parser.add_argument('-rm', help='Remove old output file if exists', action="store_true", dest='removeOld')
+parser.add_argument('-wb', help='Convert webm to mp4', action="store_true", dest='webm')
 
 
 args = parser.parse_args(sys.argv[1:])
@@ -454,6 +456,7 @@ class FFBase:
   vcodec = videoCodec
   framerate = frameRate
   duration = 0.0
+  nosound = True
 
   def __init__(self, index, ifname, tvideo):
     self.index = index
@@ -494,6 +497,7 @@ class FFBase:
           except ValueError:
             pass
       elif len(list(filter(lambda x: len(x) > 1 and x[0].lstrip().rstrip() =="codec_type" and x[1].lstrip().rstrip() == "audio", strm))) > 0:
+        self.nosound = False
         for vals in strm:
           if len(vals) < 2:
             continue
@@ -672,7 +676,10 @@ class FFCmd(FFBase):
         cy = int(self.height*self.cropy/100)
         video_filters += [f"crop={cw}:{ch}:{cx}:{cy}"]
         video_filters += [f"scale={self.width}:{self.height},setsar=1"]
-      audio_filters += [f"[{self.icmd}:a]atempo={self.frate},volume={self.volume}"]
+      if self.nosound:
+        audio_filters += [f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}"]
+      else:
+        audio_filters += [f"[{self.icmd}:a]atempo={self.frate},volume={self.volume}"]
     elif self.tcolor:
       video_filters += [f"color={self.color}:s={self.width}x{self.height}:d={self.deltat},fps={self.framerate},setsar=1"]
       audio_filters += [f"anullsrc=r={self.asample_rate}:cl=stereo:d={self.deltat}"]
@@ -1721,9 +1728,16 @@ def removeOldFile(fname):
   if os.path.exists(fname):
     os.remove(fname)
 
+def webm2mp4(ifname, ofname):
+  ffmpeg_cmds = [ffmpeg_name, "-fflags", "+genpts", "-i", ifname, "-r", f"{frameRate}", ofname]
+  subprocess.run(ffmpeg_cmds)
+  print(" ".join(ffmpeg_cmds))
+
 if __name__ == "__main__":
   try:
     ts = datetime.now()
+    if args.webm:
+      webm2mp4(args.inputFile, args.outputFile)
     if args.makeProject:
       make_project()
     if args.cleanTemp:
