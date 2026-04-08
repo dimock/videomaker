@@ -7,6 +7,7 @@ from copy import deepcopy
 defaultProjectsFolder = ""
 partPrefix = 'p'
 videoExt = '.mp4'
+srtExt = '.srt'
 videoWidth = 1920
 videoHeight = 1080
 audioSampleRate = 44100
@@ -141,6 +142,16 @@ def datetime2string(t):
     return t.strftime("%M:%S.%f")
   else:
     return t.strftime("%M:%S")
+
+def time2srttime(t):
+  s = int(math.floor(t))
+  ms = int(math.floor((t - s) * 1000))
+  m = s // 60
+  s = s % 60
+  h = m // 60
+  m = m % 60
+  srt = "%02d:%02d:%02d,%03d" % (h, m, s, ms)
+  return srt
 
 def cleanTemporaryFolder():
   for file in filter(lambda x: os.path.splitext(x)[1] == videoExt or os.path.splitext(x)[1] == ".txt", os.listdir(temporaryFolder)):
@@ -1585,7 +1596,39 @@ def merge_part(ffcmds_list, ffovls_list, framerate, ofile):
 #  print(f"{filters_str}")
 #  print(f"{ofile} total_deltat={total_deltat} overlay_deltat={overlay_deltat}")
   return total_deltat
+
+
+#1
+#00:00:0,000 --> 00:00:2,000
+#This is the first sentence
+#ffmpeg -i input.mp4 -i subtitle.en.srt -c copy -c:s mov_text -metadata:s:s:0 language=eng ouptut_english.mp4
+def create_subtitles_file(ffcmds_list):
+  tcurr = 0.0
+  strfileName = os.path.join(outputFolder, args.projectName + srtExt)
+  subtitles = []
+  index = 0
+  for ffcmd in ffcmds_list:
+    if not ffcmd.create_out:
+      continue
+    texts = []
+    for i in ffcmd.itexts:
+      fftxt = ffcmd.texts[i]
+      texts.append(fftxt.text)
+    text = ' '.join(texts)
+    if tcurr > 0.0:
+      t0 = time2srttime(tcurr)
+    else:
+      t0 = time2srttime(tcurr + 1.0)
+    tcurr += ffcmd.part_deltat()
+    t1 = time2srttime(tcurr)
+    if len(text) > 0:
+      index += 1
+      subtitles.append('\n'.join([f"{index}", f"{t0} --> {t1}", text]))
+  text = '\n\n'.join(subtitles)
+  with open(strfileName, 'wt') as f:
+    f.write(text)
  
+
 def merge_all_videos(ofile):
   cleanTemporaryFolder()
   ffcmds_list, ffsnds_list, ffovls_list = generate_ffcmds_list()
@@ -1594,6 +1637,7 @@ def merge_all_videos(ofile):
   for ffcmd in ffcmds_list:
     ffcmd.verify()
 #    print(ffcmd)
+  create_subtitles_file(ffcmds_list)
   for ffovl in ffovls_list:
     ffovl.verify()
   for ffcmd in ffcmds_list:
